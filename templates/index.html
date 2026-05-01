@@ -7,29 +7,78 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --bg: #e8edf5;
+      --surface: #ffffff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --brand: #2563eb;
+      --shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+      --shadow-btn: 0 4px 14px rgba(37, 99, 235, 0.28);
+      --shadow-ok: 0 4px 14px rgba(5, 150, 105, 0.28);
+      --radius: 12px;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: #f0f2f5;
-      color: #222;
+      background: linear-gradient(165deg, #eef2f9 0%, #e8edf5 40%, #f4f6fb 100%);
+      color: var(--text);
       min-height: 100vh;
       padding: 32px 16px;
     }
 
     .container { max-width: 1100px; margin: 0 auto; }
 
-    h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
-    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 28px; }
+    h1 { font-size: 1.65rem; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.02em; }
+    .subtitle { color: var(--muted); font-size: 0.92rem; margin-bottom: 22px; line-height: 1.45; }
+
+    /* Tabs */
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      padding: 6px;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(8px);
+      border-radius: 14px;
+      border: 1px solid rgba(226, 232, 240, 0.9);
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
+    }
+    .tab-bar .tab-trigger {
+      flex: 1;
+      padding: 13px 18px;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.93rem;
+      font-weight: 650;
+      cursor: pointer;
+      color: var(--muted);
+      background: transparent;
+      transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+    }
+    .tab-bar .tab-trigger[aria-selected="true"] {
+      background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+      color: var(--brand);
+      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.14);
+    }
+    .tab-bar .tab-trigger:focus-visible {
+      outline: 2px solid var(--brand);
+      outline-offset: 2px;
+    }
+    .tab-panel { margin-bottom: 8px; }
+    .tab-panel[hidden] { display: none !important; }
 
     /* Drop zone */
     #drop-zone {
-      border: 2px dashed #a0aec0;
-      border-radius: 10px;
-      background: #fff;
+      border: 2px dashed #c5cdd8;
+      border-radius: var(--radius);
+      background: var(--surface);
       padding: 48px 24px;
       text-align: center;
       cursor: pointer;
-      transition: border-color 0.2s, background 0.2s;
+      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
       margin-bottom: 20px;
+      box-shadow: var(--shadow);
     }
     #drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
     #drop-zone svg { display: block; margin: 0 auto 12px; opacity: 0.4; }
@@ -50,20 +99,58 @@
     }
 
     /* Buttons */
-    .btn-row { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
-    button.primary, button.success {
-      padding: 10px 22px; border: none; border-radius: 7px;
-      font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+    .btn-row { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; align-items: center; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 11px 22px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 650;
+      cursor: pointer;
+      border: none;
+      transition: transform 0.12s, box-shadow 0.18s, filter 0.15s;
+      box-shadow: var(--shadow);
     }
-    button.primary { background: #3b82f6; color: #fff; }
-    button.success { background: #16a34a; color: #fff; display: none; }
-    button.outline {
-      background: none; color: #3b82f6; border: 1.5px solid #3b82f6;
-      padding: 10px 22px; border-radius: 7px; font-size: 0.9rem;
-      font-weight: 600; cursor: pointer;
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; filter: grayscale(0.2); }
+    .btn--primary {
+      background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+      color: #fff;
     }
-    button.outline:hover { background: #eff6ff; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn--primary:hover:not(:disabled) { box-shadow: var(--shadow-btn); filter: brightness(1.03); }
+    .btn--success {
+      background: linear-gradient(180deg, #10b981 0%, #059669 100%);
+      color: #fff;
+    }
+    .btn--success:hover:not(:disabled) { box-shadow: var(--shadow-ok); filter: brightness(1.03); }
+    #download-btn { display: none; }
+    #download-btn.is-shown { display: inline-flex; }
+    .btn--secondary {
+      background: #fff;
+      color: #1d4ed8;
+      border: 2px solid #bfdbfe;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+    }
+    .btn--secondary:hover:not(:disabled) {
+      background: #eff6ff;
+      border-color: #93c5fd;
+    }
+    .btn--muted {
+      background: #fff;
+      color: #475569;
+      border: 1.5px solid #cbd5e1;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }
+    .btn--muted:hover:not(:disabled) { background: #f8fafc; border-color: #94a3b8; }
+    .btn--accent {
+      background: linear-gradient(180deg, #8b5cf6 0%, #7c3aed 100%);
+      color: #fff;
+    }
+    .btn--accent:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(124, 58, 237, 0.35); }
+    .btn--sm { padding: 8px 16px; font-size: 0.82rem; border-radius: 9px; }
 
     /* Status */
     #status { font-size: 0.88rem; margin-bottom: 16px; min-height: 20px; }
@@ -116,20 +203,22 @@
     /* Filters */
     #filter-panel {
       display: none;
-      background: #fff;
+      background: var(--surface);
       border: 1px solid #e2e8f0;
-      border-radius: 10px;
+      border-radius: var(--radius);
       padding: 18px 20px;
       margin-bottom: 20px;
+      box-shadow: var(--shadow);
     }
     #filter-panel.visible { display: block; }
     #excel-shrink {
-      background: #fff;
+      background: var(--surface);
       border: 1px solid #e2e8f0;
-      border-radius: 10px;
+      border-radius: var(--radius);
       padding: 18px 20px;
-      margin-bottom: 20px;
-      margin-top: 8px;
+      margin-bottom: 12px;
+      margin-top: 4px;
+      box-shadow: var(--shadow);
     }
     #filter-panel h2, #excel-shrink h2 {
       font-size: 1rem;
@@ -171,43 +260,52 @@
       line-height: 1;
       padding: 0;
     }
-    #peek-out-extract, #excel-peek-out {
-      font-size: 0.8rem;
-      color: #475569;
-      margin-top: 8px;
-      padding: 10px;
-      background: #f8fafc;
-      border-radius: 8px;
-      max-height: 140px;
-      overflow-y: auto;
+    .peek-panel {
+      margin-top: 12px;
       display: none;
     }
-    #peek-out-extract.visible, #excel-peek-out.visible { display: block; }
-    .btn-small {
-      padding: 7px 14px;
-      font-size: 0.82rem;
-      border-radius: 6px;
-      border: 1px solid #94a3b8;
-      background: #fff;
-      cursor: pointer;
-      font-weight: 500;
+    .peek-panel.visible { display: block; }
+    .peek-meta {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 8px;
     }
-    .btn-small:hover { background: #f1f5f9; }
-    .btn-small:disabled { opacity: 0.45; cursor: not-allowed; }
-    details.excel-details { margin-top: 16px; }
-    details.excel-details summary {
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 0.95rem;
-      color: #334155;
-      margin-bottom: 10px;
+    .peek-panel .table-wrap {
+      max-height: 220px;
+      overflow: auto;
+      border-radius: 10px;
     }
+    #excel-rows-preview {
+      margin-top: 14px;
+      display: none;
+    }
+    #excel-rows-preview.visible { display: block; }
+    #excel-rows-preview .table-wrap {
+      max-height: 280px;
+      overflow: auto;
+    }
+    .sample-table td.num {
+      width: 2.5rem;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    #peek-out-extract, #excel-peek-out { margin-top: 0; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Test Plan → Excel Converter</h1>
-    <p class="subtitle">Upload .docx test plan files to extract test cases into a spreadsheet.</p>
+    <p class="subtitle" id="page-subtitle">Upload .docx test plan files to extract test cases into a spreadsheet.</p>
+
+    <div class="tab-bar" role="tablist" aria-label="Views">
+      <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Converter</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Shrink Excel</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="error-list"></div>
+
+    <div id="panel-converter" class="tab-panel" role="tabpanel" aria-labelledby="tab-converter">
 
     <div id="drop-zone">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
@@ -223,14 +321,11 @@
     <div id="file-list"></div>
 
     <div class="btn-row">
-      <button class="primary" id="extract-btn" disabled>Extract Test Cases</button>
-      <button class="success" id="download-btn">Download Excel</button>
-      <button class="outline" id="preview-btn" disabled>Preview Parsed Text</button>
-      <button class="outline" id="sample-btn">Load Sample</button>
+      <button type="button" class="btn btn--primary" id="extract-btn" disabled>Extract Test Cases</button>
+      <button type="button" class="btn btn--success" id="download-btn">Download Excel</button>
+      <button type="button" class="btn btn--secondary" id="preview-btn" disabled>Preview Parsed Text</button>
+      <button type="button" class="btn btn--secondary" id="sample-btn">Load Sample</button>
     </div>
-
-    <div id="status"></div>
-    <div id="error-list"></div>
 
     <div id="doc-preview">
       <h2>Parsed Document Text <span id="preview-file-label" style="font-weight:400;color:#666;"></span></h2>
@@ -240,7 +335,7 @@
     <div id="filter-panel">
       <h2>Filter extracted rows</h2>
       <p class="hint">
-        Stack filters to shrink the result before download. Values are not listed automatically — use <strong>Sample values</strong> if you need a peek (capped).
+        Stack filters to shrink the result before download. Distinct values are not loaded until you click <strong>Sample values (table)</strong>.
       </p>
       <div class="filter-chips" id="filter-chips"></div>
       <div class="filter-row">
@@ -252,14 +347,14 @@
           <option value="not_contains">Does not contain</option>
         </select>
         <input type="text" id="filter-needle" placeholder="Text to match (required)" autocomplete="off" />
-        <button type="button" class="btn-small" id="filter-add-btn">Add filter</button>
-        <button type="button" class="btn-small" id="filter-reset-btn">Clear all filters</button>
+        <button type="button" class="btn btn--accent btn--sm" id="filter-add-btn">Add filter</button>
+        <button type="button" class="btn btn--muted btn--sm" id="filter-reset-btn">Clear all filters</button>
       </div>
       <div class="filter-row">
-        <button type="button" class="btn-small" id="peek-extract-btn">Sample values for selected column</button>
-        <span class="hint" style="margin:0;">(max 30 values, scans up to 8k rows)</span>
+        <button type="button" class="btn btn--muted btn--sm" id="peek-extract-btn">Sample values (table)</button>
+        <span class="hint" style="margin:0;">On demand · max 30 distinct · scans ≤ 8k rows</span>
       </div>
-      <div id="peek-out-extract"></div>
+      <div id="peek-out-extract" class="peek-panel"></div>
     </div>
 
     <div id="preview-section">
@@ -282,19 +377,22 @@
       </div>
     </div>
 
-    <details class="excel-details">
-      <summary>Shrink an existing Excel file (.xlsx)</summary>
+    </div><!-- panel-converter -->
+
+    <div id="panel-excel" class="tab-panel" role="tabpanel" aria-labelledby="tab-excel" hidden>
       <div id="excel-shrink">
         <p class="hint">
-          Large sheets: only column names and row counts load at first — no value list unless you click <strong>Peek sample values</strong>.
+          Large sheets: only column names and row counts load when you analyze — no heavy lists until you click preview or peek.
         </p>
         <div class="filter-row">
           <input type="file" id="excel-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
-          <button type="button" class="btn-small" id="excel-analyze-btn" disabled>Analyze sheet</button>
+          <button type="button" class="btn btn--primary btn--sm" id="excel-analyze-btn" disabled>Analyze sheet</button>
+          <button type="button" class="btn btn--secondary btn--sm" id="excel-preview-rows-btn" disabled>Preview top rows</button>
         </div>
         <div class="filter-row" id="excel-meta" style="display:none;">
           <span id="excel-row-count" class="hint" style="margin:0;"></span>
         </div>
+        <div id="excel-rows-preview"></div>
         <div class="filter-row">
           <select id="excel-sheet" style="display:none;" aria-label="Sheet"></select>
           <select id="excel-column" aria-label="Column"></select>
@@ -305,15 +403,16 @@
             <option value="not_contains">Does not contain</option>
           </select>
           <input type="text" id="excel-needle" placeholder="Filter text (optional = match all)" autocomplete="off" />
-          <button type="button" class="btn-small" id="excel-download-btn" disabled>Download filtered sheet</button>
+          <button type="button" class="btn btn--primary btn--sm" id="excel-download-btn" disabled>Download filtered sheet</button>
         </div>
         <div class="filter-row">
-          <button type="button" class="btn-small" id="excel-peek-btn" disabled>Peek sample values</button>
-          <span class="hint" style="margin:0;">(server cap 30 / scan 20k rows)</span>
+          <button type="button" class="btn btn--muted btn--sm" id="excel-peek-btn" disabled>Peek distinct values (table)</button>
+          <span class="hint" style="margin:0;">On demand · server cap 30 values / 20k rows scanned</span>
         </div>
-        <div id="excel-peek-out"></div>
+        <div id="excel-peek-out" class="peek-panel"></div>
       </div>
-    </details>
+    </div>
+
   </div>
 
   <script>
@@ -332,6 +431,49 @@
       expected_results: 'Expected Results',
     };
     const PREVIEW_MAX = 200;
+    const SUBTITLE_CONVERTER = 'Upload .docx test plan files to extract test cases into a spreadsheet.';
+    const SUBTITLE_EXCEL =
+      'Load a spreadsheet, preview rows only when you ask, then filter and download a smaller .xlsx.';
+
+    const pageSubtitle = document.getElementById('page-subtitle');
+    document.querySelectorAll('.tab-bar .tab-trigger').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        document.querySelectorAll('.tab-bar .tab-trigger').forEach(b => {
+          b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+        });
+        document.getElementById('panel-converter').hidden = tab !== 'converter';
+        document.getElementById('panel-excel').hidden = tab !== 'excel';
+        pageSubtitle.textContent = tab === 'excel' ? SUBTITLE_EXCEL : SUBTITLE_CONVERTER;
+      });
+    });
+
+    function renderDistinctTable(container, columnTitle, values, scanned, truncated, metaLine) {
+      if (!values.length) {
+        container.innerHTML = '<p class="peek-meta">No non-empty distinct values in the scanned range.</p>';
+        container.classList.add('visible');
+        return;
+      }
+      const body = values.map((v, i) => `<tr><td class="num">${i + 1}</td><td>${esc(v)}</td></tr>`).join('');
+      container.innerHTML =
+        `<p class="peek-meta">${metaLine}</p>` +
+        `<div class="table-wrap"><table class="sample-table"><thead><tr><th>#</th><th>${esc(columnTitle)}</th></tr></thead><tbody>${body}</tbody></table></div>`;
+      container.classList.add('visible');
+    }
+
+    function renderGridPreview(container, columns, rows, caption) {
+      if (!columns.length) {
+        container.innerHTML = '';
+        container.classList.remove('visible');
+        return;
+      }
+      const thead = `<tr>${columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr>`;
+      const tbody = rows.map(r => `<tr>${r.map(c => `<td>${esc(String(c ?? ''))}</td>`).join('')}</tr>`).join('');
+      container.innerHTML =
+        `<p class="peek-meta">${esc(caption)}</p>` +
+        `<div class="table-wrap"><table class="sample-table"><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+      container.classList.add('visible');
+    }
 
     const dropZone    = document.getElementById('drop-zone');
     const fileInput   = document.getElementById('file-input');
@@ -440,11 +582,10 @@
         out.push(v);
         if (out.length >= maxVals) { truncated = true; break; }
       }
-      peekOutExtract.innerHTML =
-        '<strong>Sample values</strong> (' + out.length + ' distinct, scanned ' + scanned + ' rows)' +
-        (truncated ? ' — <em>truncated</em>' : '') + ':<br />' +
-        out.map(v => esc(v)).join(', ');
-      peekOutExtract.classList.add('visible');
+      const colTitle = COL_LABELS[column] || column;
+      const meta =
+        `${out.length} distinct values · scanned ${scanned} row(s)` + (truncated ? ' · truncated' : '');
+      renderDistinctTable(peekOutExtract, colTitle, out, scanned, truncated, meta);
     });
 
     /* ── Excel shrink ─────────────────────────────────────────────────────── */
@@ -459,6 +600,8 @@
     const excelMeta = document.getElementById('excel-meta');
     const excelRowCount = document.getElementById('excel-row-count');
     const excelPeekOut = document.getElementById('excel-peek-out');
+    const excelPreviewRowsBtn = document.getElementById('excel-preview-rows-btn');
+    const excelRowsPreview = document.getElementById('excel-rows-preview');
     let excelFile = null;
 
     async function loadExcelInfo(sheetIndex) {
@@ -491,8 +634,11 @@
       excelRowCount.textContent = `${d.row_count.toLocaleString()} data rows · ${d.columns.length} columns`;
       excelDownloadBtn.disabled = d.columns.length === 0;
       excelPeekBtn.disabled = d.columns.length === 0;
+      excelPreviewRowsBtn.disabled = d.columns.length === 0;
       excelPeekOut.classList.remove('visible');
       excelPeekOut.innerHTML = '';
+      excelRowsPreview.classList.remove('visible');
+      excelRowsPreview.innerHTML = '';
     }
 
     excelFileInput.addEventListener('change', e => {
@@ -500,10 +646,37 @@
       excelAnalyzeBtn.disabled = !excelFile;
       excelDownloadBtn.disabled = true;
       excelPeekBtn.disabled = true;
+      excelPreviewRowsBtn.disabled = true;
       excelMeta.style.display = 'none';
       excelSheet.style.display = 'none';
       excelPeekOut.classList.remove('visible');
       excelPeekOut.innerHTML = '';
+      excelRowsPreview.classList.remove('visible');
+      excelRowsPreview.innerHTML = '';
+    });
+
+    excelPreviewRowsBtn.addEventListener('click', async () => {
+      if (!excelFile) return;
+      excelPreviewRowsBtn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', excelFile);
+        fd.append('sheet_index', excelSheet.style.display === 'none' ? '0' : excelSheet.value);
+        fd.append('limit', '15');
+        const r = await fetch('/excel/sample-rows', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        renderGridPreview(
+          excelRowsPreview,
+          d.columns,
+          d.rows,
+          `First ${d.rows.length} data row(s), all columns (preview only)`
+        );
+      } catch (err) {
+        setStatus(`Row preview: ${esc(err.message)}`, 'error');
+      } finally {
+        excelPreviewRowsBtn.disabled = false;
+      }
     });
 
     excelAnalyzeBtn.addEventListener('click', async () => {
@@ -538,11 +711,10 @@
         const r = await fetch('/excel/peek-column', { method: 'POST', body: fd });
         const d = await r.json();
         if (d.error) throw new Error(d.error);
-        excelPeekOut.innerHTML =
-          '<strong>Sample values</strong> (distinct ' + d.values.length + ', scanned ' + d.scanned_rows + ' rows)' +
-          (d.truncated ? ' — <em>truncated</em>' : '') + ':<br />' +
-          d.values.map(v => esc(v)).join(', ');
-        excelPeekOut.classList.add('visible');
+        const meta =
+          `${d.values.length} distinct · scanned ${d.scanned_rows} row(s)` +
+          (d.truncated ? ' · truncated' : '');
+        renderDistinctTable(excelPeekOut, excelColumn.value, d.values, d.scanned_rows, d.truncated, meta);
       } catch (err) {
         setStatus(`Peek: ${esc(err.message)}`, 'error');
       } finally {
@@ -598,7 +770,7 @@
       const hasFiles = selectedFiles.length > 0;
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
-      downloadBtn.style.display = 'none';
+      downloadBtn.classList.remove('is-shown');
       extractedRows = [];
       activeFilters = [];
       filterPanel.classList.remove('visible');
@@ -618,7 +790,7 @@
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
       if (!hasFiles) {
-        downloadBtn.style.display = 'none';
+        downloadBtn.classList.remove('is-shown');
         docPreview.style.display = 'none';
         extractedRows = [];
         activeFilters = [];
@@ -680,7 +852,7 @@
     // ── Extract ──────────────────────────────────────────────────────────────
     extractBtn.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
-      extractBtn.disabled = true; downloadBtn.style.display = 'none';
+      extractBtn.disabled = true; downloadBtn.classList.remove('is-shown');
       clearPreview();
       clearStatus();
       setStatus('<span class="spinner"></span>Extracting…', 'loading');
@@ -709,7 +881,7 @@
           renderFilterChips();
           filterPanel.classList.add('visible');
           renderPreview(computeFiltered());
-          downloadBtn.style.display = 'block';
+          downloadBtn.classList.add('is-shown');
         }
       } catch (err) {
         setStatus(`Error: ${esc(err.message)}`, 'error');

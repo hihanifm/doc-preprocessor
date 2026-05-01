@@ -165,6 +165,41 @@ def filter_xlsx_to_bytes(
         wb.close()
 
 
+def sample_sheet_rows(
+    path: str,
+    sheet_index: int = 0,
+    max_rows: int = 15,
+) -> Tuple[List[str], List[List[Any]]]:
+    """First header row + up to max_rows data rows for UI preview (read-only)."""
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        names = wb.sheetnames
+        if sheet_index < 0 or sheet_index >= len(names):
+            raise ValueError("Invalid sheet index")
+        ws = wb[names[sheet_index]]
+        rows_iter = ws.iter_rows(values_only=True)
+        header_row = next(rows_iter, None)
+        if not header_row:
+            return [], []
+        headers = [
+            normalize_cell(h) if normalize_cell(h) else f"Column{i + 1}"
+            for i, h in enumerate(header_row)
+        ]
+        out: List[List[Any]] = []
+        n = 0
+        for row in rows_iter:
+            if n >= max_rows:
+                break
+            vals = list(row)
+            while len(vals) < len(headers):
+                vals.append(None)
+            out.append(vals[: len(headers)])
+            n += 1
+        return headers, out
+    finally:
+        wb.close()
+
+
 def dict_rows_to_xlsx_bytes(
     rows: List[Dict[str, Any]],
     headers: List[str],

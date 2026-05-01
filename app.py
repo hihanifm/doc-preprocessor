@@ -5,7 +5,12 @@ import tempfile
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory
 
 import extractors as extractor_registry
-from excel_filter import filter_xlsx_to_bytes, peek_distinct, workbook_sheet_info
+from excel_filter import (
+    filter_xlsx_to_bytes,
+    peek_distinct,
+    sample_sheet_rows,
+    workbook_sheet_info,
+)
 from exporter import to_excel
 from readers.docx_reader import read_docx
 
@@ -153,6 +158,29 @@ def excel_sheet_info():
         return jsonify(
             {"columns": headers, "row_count": row_count, "sheet_names": sheet_names}
         )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        _cleanup_tmp(tmp_path)
+
+
+@app.route("/excel/sample-rows", methods=["POST"])
+def excel_sample_rows():
+    """First N data rows as JSON for a compact table preview (on demand only)."""
+    f = request.files.get("file")
+    if not f or not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"error": "Upload a .xlsx or .xlsm file"}), 400
+    tmp_path = None
+    try:
+        sheet_index = int(request.form.get("sheet_index", 0))
+        limit = min(max(int(request.form.get("limit", 15)), 1), 50)
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            f.save(tmp.name)
+            tmp_path = tmp.name
+        columns, rows = sample_sheet_rows(tmp_path, sheet_index, max_rows=limit)
+        return jsonify({"columns": columns, "rows": rows})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
