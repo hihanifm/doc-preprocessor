@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Doc Clinic</title>
+  <title>Docs Garage</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -168,6 +168,7 @@
     #status.error { color: #dc2626; }
     #status.ok { color: #16a34a; }
     #status.loading { color: #3b82f6; }
+    #status.warning { color: #b45309; }
 
     /* Errors list */
     #error-list { margin-bottom: 16px; }
@@ -175,6 +176,36 @@
       background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b;
       border-radius: 7px; padding: 10px 14px; font-size: 0.82rem; margin: 4px 0;
     }
+
+    /* Extract — per-file template matching */
+    .extract-summary {
+      display: none;
+      margin-bottom: 16px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      background: var(--surface);
+      padding: 14px 16px;
+      font-size: 0.84rem;
+      line-height: 1.45;
+      box-shadow: var(--shadow);
+    }
+    .extract-summary.visible { display: block; }
+    .extract-summary h3 {
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .extract-summary-row {
+      padding: 8px 0;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .extract-summary-row:last-child { border-bottom: none; }
+    .extract-summary-row--ok { color: #166534; }
+    .extract-summary-row--bad { color: #991b1b; }
+    .extract-summary code { font-size: 0.8em; background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
 
     /* Doc preview */
     #doc-preview { display: none; margin-bottom: 24px; }
@@ -305,8 +336,8 @@
 </head>
 <body>
   <div class="container">
-    <h1>Doc Clinic</h1>
-    <p class="subtitle" id="page-subtitle">Bring Word &amp; Excel to the clinic — pull out test cases (plus other structured rows), filter what you need, leave with a cleaner spreadsheet.</p>
+    <h1>Docs Garage</h1>
+    <p class="subtitle" id="page-subtitle">Roll Word &amp; Excel into the garage — pull out test cases (plus other structured rows), filter what you need, drive away with a cleaner spreadsheet.</p>
 
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
@@ -315,6 +346,7 @@
 
     <div id="status"></div>
     <div id="error-list"></div>
+    <div id="extract-summary" class="extract-summary" aria-live="polite"></div>
 
     <div id="panel-converter" class="tab-panel" role="tabpanel" aria-labelledby="tab-converter">
 
@@ -508,6 +540,7 @@
     const sampleBtn   = document.getElementById('sample-btn');
     const statusEl    = document.getElementById('status');
     const errorList   = document.getElementById('error-list');
+    const extractSummaryEl = document.getElementById('extract-summary');
     const previewSection = document.getElementById('preview-section');
     const previewTitle   = document.getElementById('preview-title');
     const previewBody    = document.getElementById('preview-body');
@@ -524,6 +557,34 @@
       const sel = document.getElementById('filter-column');
       sel.innerHTML = COL_KEYS.map(k => `<option value="${k}">${COL_LABELS[k]}</option>`).join('');
     })();
+
+    function clearExtractSummary() {
+      extractSummaryEl.innerHTML = '';
+      extractSummaryEl.classList.remove('visible');
+    }
+
+    function renderExtractSummary(fileResults) {
+      if (!fileResults || !fileResults.length) {
+        clearExtractSummary();
+        return;
+      }
+      const rows = fileResults.map(fr => {
+        if (fr.ok) {
+          const rowPhrase = fr.rows === 1 ? '1 row' : `${fr.rows} rows`;
+          const zeroHint = fr.rows === 0 ? ' Ask your developer if this document should yield rows.' : '';
+          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — matched template <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}</div>`;
+        }
+        if (fr.reason === 'no_template') {
+          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples).</div>`;
+        }
+        if (fr.reason === 'unsupported') {
+          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — only <code>.docx</code> files work on this tab.</div>`;
+        }
+        return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — ${esc(fr.detail || 'Extraction failed.')}</div>`;
+      }).join('');
+      extractSummaryEl.innerHTML = '<h3>Extractor template matching</h3>' + rows;
+      extractSummaryEl.classList.add('visible');
+    }
 
     function applyOneFilter(rows, column, mode, needle) {
       const n = (needle || '').trim();
@@ -869,7 +930,12 @@
     }
 
     function setStatus(msg, cls) { statusEl.className = cls || ''; statusEl.innerHTML = msg; }
-    function clearStatus() { statusEl.innerHTML = ''; statusEl.className = ''; errorList.innerHTML = ''; }
+    function clearStatus() {
+      statusEl.innerHTML = '';
+      statusEl.className = '';
+      errorList.innerHTML = '';
+      clearExtractSummary();
+    }
     function clearPreview() {
       previewBody.innerHTML = '';
       previewSection.style.display = 'none';
@@ -935,16 +1001,41 @@
 
         extractedRows = data.rows || [];
         const errors = data.errors || [];
+        const fileResults = data.file_results || [];
 
-        if (errors.length) {
+        if (fileResults.length) {
+          errorList.innerHTML = '';
+          renderExtractSummary(fileResults);
+        } else if (errors.length) {
+          clearExtractSummary();
           errorList.innerHTML = errors.map(e => `<div class="error-item">${esc(e)}</div>`).join('');
+        } else {
+          clearExtractSummary();
         }
 
-        if (extractedRows.length === 0) {
-          setStatus('No test cases found.', 'error');
+        const anyOk = fileResults.some(r => r.ok);
+        const anyRows = extractedRows.length > 0;
+        const allNoTemplate = fileResults.length > 0 && fileResults.every(r => !r.ok && r.reason === 'no_template');
+
+        if (!anyRows) {
+          if (allNoTemplate) {
+            setStatus('No extractor template matched your file(s). Check the breakdown below and contact your developer for a new template.', 'error');
+          } else if (anyOk) {
+            setStatus('A template matched, but <strong>zero</strong> test case rows came back. Try another document or ask your developer to adjust the extractor.', 'warning');
+          } else if (errors.length) {
+            setStatus('Nothing was extracted. See the breakdown below.', 'error');
+          } else {
+            setStatus('No test cases found.', 'error');
+          }
         } else {
-          const tmpl = data.template ? ` &nbsp;|&nbsp; template: <strong>${esc(data.template)}</strong>` : '';
-          setStatus(`Found <strong>${extractedRows.length}</strong> test case(s) across ${selectedFiles.length} file(s).${tmpl}`, 'ok');
+          const tplNote = data.template
+            ? ` Extractor template(s): <strong>${esc(data.template)}</strong>.`
+            : '';
+          const okFiles = fileResults.filter(r => r.ok).length;
+          setStatus(
+            `<strong>${extractedRows.length}</strong> test case row(s) ready from ${okFiles} file(s).${tplNote}`,
+            'ok'
+          );
           activeFilters = [];
           renderFilterChips();
           filterPanel.classList.add('visible');

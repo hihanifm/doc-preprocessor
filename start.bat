@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Doc Clinic - Starting...
+echo  Docs Garage - Starting...
 echo ============================================
 
 :: Check .env exists

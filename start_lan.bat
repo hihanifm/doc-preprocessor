@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Doc Clinic - LAN Mode
+echo  Docs Garage - LAN Mode
 echo  (accessible from other machines)
 echo ============================================
 

@@ -80,12 +80,24 @@ def extract():
 
     all_rows = []
     errors = []
-    template_used = None
+    file_results: list[dict] = []
+    templates_order: list[str] = []
     tmp_path = None
 
     for f in files:
+        display_name = f.filename or "(upload)"
         if not f.filename.lower().endswith(".docx"):
-            errors.append(f"{f.filename}: only .docx files are supported")
+            msg = f"{display_name}: only .docx files are supported"
+            errors.append(msg)
+            file_results.append(
+                {
+                    "filename": display_name,
+                    "template": None,
+                    "rows": 0,
+                    "ok": False,
+                    "reason": "unsupported",
+                }
+            )
             continue
         try:
             with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
@@ -97,18 +109,46 @@ def extract():
 
             if ext is None:
                 errors.append(
-                    f"{f.filename}: No template found for this document format. "
-                    "Ask your developer to add an extractor in extractors/ "
-                    "using the samples/ folder as reference."
+                    f"{display_name}: No extractor template matched this document. "
+                    "Ask your developer to add an extractor under extractors/ "
+                    "(see samples/ for reference formats)."
+                )
+                file_results.append(
+                    {
+                        "filename": display_name,
+                        "template": None,
+                        "rows": 0,
+                        "ok": False,
+                        "reason": "no_template",
+                    }
                 )
                 continue
 
-            rows = ext.extract(doc_text, f.filename)
+            rows = ext.extract(doc_text, display_name)
             all_rows.extend(rows)
-            template_used = ext.name
+            if ext.name not in templates_order:
+                templates_order.append(ext.name)
+            file_results.append(
+                {
+                    "filename": display_name,
+                    "template": ext.name,
+                    "rows": len(rows),
+                    "ok": True,
+                }
+            )
 
         except Exception as e:
-            errors.append(f"{f.filename}: {e}")
+            errors.append(f"{display_name}: {e}")
+            file_results.append(
+                {
+                    "filename": display_name,
+                    "template": None,
+                    "rows": 0,
+                    "ok": False,
+                    "reason": "exception",
+                    "detail": str(e),
+                }
+            )
         finally:
             if tmp_path:
                 try:
@@ -117,7 +157,16 @@ def extract():
                     pass
                 tmp_path = None
 
-    return jsonify({"rows": all_rows, "errors": errors, "template": template_used})
+    template_used = " · ".join(templates_order) if templates_order else None
+
+    return jsonify(
+        {
+            "rows": all_rows,
+            "errors": errors,
+            "template": template_used,
+            "file_results": file_results,
+        }
+    )
 
 
 @app.route("/download", methods=["POST"])

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-**Doc Clinic** — local Flask app for fixing up office files: extract structured rows (incl. test cases) from `.docx` via template extractors, filter and preview in the UI, export `.xlsx`, and shrink huge spreadsheets with column filters before download.
+**Docs Garage** — local Flask app for tinkering with office files in one place: extract structured rows (incl. test cases) from `.docx` via template extractors, filter and preview in the UI, export `.xlsx`, and shrink huge spreadsheets with column filters before download.
 
 ## Running the app
 
