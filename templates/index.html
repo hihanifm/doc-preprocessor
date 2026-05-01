@@ -68,7 +68,7 @@
     .tab-panel { margin-bottom: 8px; }
     .tab-panel[hidden] { display: none !important; }
 
-    /* Shared drop zone — test case extractor (.docx) + spreadsheet shrinker (.xlsx) */
+    /* Shared drop zone — test case extractor (.docx / .pdf) + spreadsheet shrinker (.xlsx) */
     .drop-zone {
       border: 2px dashed #c5cdd8;
       border-radius: var(--radius);
@@ -356,9 +356,9 @@
         <polyline points="17 8 12 3 7 8"/>
         <line x1="12" y1="3" x2="12" y2="15"/>
       </svg>
-      <p>Drag &amp; drop .docx files here, or <strong>click to browse</strong></p>
-      <small>Multiple files supported</small>
-      <input type="file" id="file-input" accept=".docx" multiple />
+      <p>Drag &amp; drop <strong>.docx</strong> or <strong>digital .pdf</strong> files here, or <strong>click to browse</strong></p>
+      <small>Multiple files supported · PDFs need an extractable text layer (scanned pages are not supported)</small>
+      <input type="file" id="file-input" accept=".docx,.pdf,application/pdf" multiple />
     </div>
 
     <div id="file-list"></div>
@@ -367,7 +367,8 @@
       <button type="button" class="btn btn--primary" id="extract-btn" disabled>Extract Test Cases</button>
       <button type="button" class="btn btn--success" id="download-btn">Download Excel</button>
       <button type="button" class="btn btn--secondary" id="preview-btn" disabled>Preview Parsed Text</button>
-      <button type="button" class="btn btn--secondary" id="sample-btn">Load Sample</button>
+      <button type="button" class="btn btn--secondary" id="sample-btn">Load Word sample</button>
+      <button type="button" class="btn btn--secondary" id="sample-pdf-btn">Load PDF sample</button>
     </div>
 
     <div id="doc-preview">
@@ -487,7 +488,7 @@
     };
     const PREVIEW_MAX = 200;
     const SUBTITLE_CONVERTER =
-      'Test case extractor: drop .docx files — we pull structured rows (test cases included), stack filters, peek values on demand, export Excel.';
+      'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), stack filters, peek values on demand, export Excel.';
     const SUBTITLE_EXCEL =
       'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
 
@@ -538,6 +539,7 @@
     const downloadBtn = document.getElementById('download-btn');
     const previewBtn  = document.getElementById('preview-btn');
     const sampleBtn   = document.getElementById('sample-btn');
+    const samplePdfBtn = document.getElementById('sample-pdf-btn');
     const statusEl    = document.getElementById('status');
     const errorList   = document.getElementById('error-list');
     const extractSummaryEl = document.getElementById('extract-summary');
@@ -578,7 +580,10 @@
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples).</div>`;
         }
         if (fr.reason === 'unsupported') {
-          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — only <code>.docx</code> files work on this tab.</div>`;
+          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — only <code>.docx</code> and digital <code>.pdf</code> files work on this tab.</div>`;
+        }
+        if (fr.reason === 'empty_text') {
+          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No extractable text</strong> (often a scanned PDF). OCR is not supported; use a text-based PDF.</div>`;
         }
         return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — ${esc(fr.detail || 'Extraction failed.')}</div>`;
       }).join('');
@@ -892,7 +897,10 @@
     fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
 
     function addFiles(files) {
-      files.filter(f => f.name.toLowerCase().endsWith('.docx')).forEach(f => {
+      files.filter(f => {
+        const n = f.name.toLowerCase();
+        return n.endsWith('.docx') || n.endsWith('.pdf');
+      }).forEach(f => {
         if (!selectedFiles.find(x => x.name === f.name)) selectedFiles.push(f);
       });
       renderFileList();
@@ -957,7 +965,21 @@
       } catch (e) {
         setStatus(`Error: ${esc(e.message)}`, 'error');
       } finally {
-        sampleBtn.disabled = false; sampleBtn.textContent = 'Load Sample';
+        sampleBtn.disabled = false; sampleBtn.textContent = 'Load Word sample';
+      }
+    });
+
+    samplePdfBtn.addEventListener('click', async () => {
+      samplePdfBtn.disabled = true; samplePdfBtn.textContent = 'Loading…';
+      try {
+        const resp = await fetch('/samples/sample_test_plan.pdf');
+        if (!resp.ok) throw new Error('Could not fetch PDF sample');
+        const blob = await resp.blob();
+        addFiles([new File([blob], 'sample_test_plan.pdf', { type: blob.type || 'application/pdf' })]);
+      } catch (e) {
+        setStatus(`Error: ${esc(e.message)}`, 'error');
+      } finally {
+        samplePdfBtn.disabled = false; samplePdfBtn.textContent = 'Load PDF sample';
       }
     });
 

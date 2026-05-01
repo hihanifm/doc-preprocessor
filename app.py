@@ -12,7 +12,12 @@ from excel_filter import (
     workbook_sheet_info,
 )
 from exporter import to_excel
-from readers.docx_reader import read_docx
+from readers.document_reader import read_document
+
+
+def _document_suffix(filename: str | None) -> str | None:
+    ext = os.path.splitext(filename or "")[1].lower()
+    return ext if ext in (".docx", ".pdf") else None
 
 FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with"})
 
@@ -55,12 +60,15 @@ def preview_doc():
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "No file"}), 400
+    suffix = _document_suffix(f.filename)
+    if not suffix:
+        return jsonify({"error": "Upload a .docx or .pdf file"}), 400
     tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             f.save(tmp.name)
             tmp_path = tmp.name
-        doc_text = read_docx(tmp_path)
+        doc_text = read_document(tmp_path)
         return jsonify({"document_text": doc_text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -86,8 +94,9 @@ def extract():
 
     for f in files:
         display_name = f.filename or "(upload)"
-        if not f.filename.lower().endswith(".docx"):
-            msg = f"{display_name}: only .docx files are supported"
+        suffix = _document_suffix(f.filename)
+        if not suffix:
+            msg = f"{display_name}: only .docx and .pdf files are supported"
             errors.append(msg)
             file_results.append(
                 {
@@ -100,11 +109,27 @@ def extract():
             )
             continue
         try:
-            with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 f.save(tmp.name)
                 tmp_path = tmp.name
 
-            doc_text = read_docx(tmp_path)
+            doc_text = read_document(tmp_path)
+            if not doc_text.strip():
+                errors.append(
+                    f"{display_name}: No extractable text in this PDF (common for scanned "
+                    "documents). OCR is not supported — use a digital/text-based PDF."
+                )
+                file_results.append(
+                    {
+                        "filename": display_name,
+                        "template": None,
+                        "rows": 0,
+                        "ok": False,
+                        "reason": "empty_text",
+                    }
+                )
+                continue
+
             ext = extractor_registry.find_extractor(doc_text)
 
             if ext is None:

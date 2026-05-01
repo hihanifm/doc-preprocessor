@@ -5,21 +5,23 @@ description: How to add and reason about test-plan extractors (template matching
 
 # Skill: Extractor templates & test-case row format
 
-Use this when you need to **support a new `.docx` layout**, **debug “no template matched”**, or **generate extractor code** from a sample document.
+Use this when you need to **support a new Word or PDF layout**, **debug “no template matched”**, or **generate extractor code** from a sample document.
 
 ## What an “extractor” is here
 
 - **Not** an LLM prompt. Extractors are **Python classes** that implement deterministic parsing.
 - Each extractor is a **template profile**: “if the document looks like *this*, parse it *this way*.”
-- The web app reads `.docx` → **plain text** (`readers/docx_reader.py`) → picks **one** extractor whose `matches(doc_text)` is true → calls `extract(doc_text, filename)` → builds rows → Excel.
+- The web app reads `.docx` or digital `.pdf` → **plain text** (`readers/document_reader.read_document`, which uses `docx_reader` / `pdf_reader`) → picks **one** extractor whose `matches(doc_text)` is true → calls `extract(doc_text, filename)` → builds rows → Excel.
 
 ## End-to-end pipeline (for agents)
 
 1. **Normalize input**  
-   Everything downstream sees **`doc_text`**: headings become `## Heading`, tables become pipe-separated lines. Order matches the Word document.  
+   Everything downstream sees **`doc_text`**: Word headings become `## Heading`, tables become pipe-separated lines in document order. PDFs use the same pipe style for **detected** tables; page text is interleaved top-to-bottom with tables (no Word “Heading” styles — sections are plain lines unless you add reader heuristics later).  
+   **Scanned PDFs / OCR are not supported** — empty text usually means no extractable layer.
    Inspect any file with:
    ```bash
-   python3 -c "from readers.docx_reader import read_docx; print(read_docx('samples/your_file.docx'))"
+   python3 -c "from readers.document_reader import read_document; print(read_document('samples/your_file.docx'))"
+   python3 -c "from readers.document_reader import read_document; print(read_document('samples/your_file.pdf'))"
    ```
 
 2. **Detect format (`matches`)**  
@@ -34,7 +36,7 @@ Use this when you need to **support a new `.docx` layout**, **debug “no templa
 
 4. **Ship it**  
    - Add a module under **`extractors/`** that subclasses **`BaseExtractor`** (`extractors/base.py`).  
-   - Put a representative **`samples/your_format.docx`** and document it in **`samples/README.md`**.  
+   - Put a representative **`samples/your_format.docx`** and/or **`.pdf`** and document it in **`samples/README.md`**.  
    - Restart the app; extractors are **auto-imported** (see `_load_extractors` in `extractors/__init__.py`).
 
 ## Output row shape (contract)
@@ -55,8 +57,8 @@ The Excel exporter (`exporter.py`) expects exactly this set. Missing keys become
 
 ## Given a new document — agent checklist
 
-1. Save it as **`samples/<name>.docx`**.
-2. Print **`read_docx`** output; note:
+1. Save it as **`samples/<name>.docx`** or **`.pdf`** (digital text PDF).
+2. Print **`read_document`** output; note:
    - How test cases are **bounded** (e.g. `##` headings, numbered sections).
    - Where **IDs** live (heading suffix, table column, paragraph).
    - How **steps / expected** appear (one table vs two, column headers, merged cells flattened to text).
@@ -67,7 +69,7 @@ The Excel exporter (`exporter.py`) expects exactly this set. Missing keys become
 
 ## Reference implementation
 
-- **`extractors/user_management.py`** — underscore-style TC IDs in `##` headings, tables for steps/expected, two layout variants.
+- **`extractors/user_management.py`** — underscore-style TC IDs in `##` headings, tables for steps/expected, two layout variants (works on **`samples/sample_test_plan.docx`** and **`samples/sample_test_plan.pdf`** when the emitted text matches).
 - **`samples/README.md`** — short “how to add a format” blurb.
 
 ## When extraction returns zero rows but `matches` is true

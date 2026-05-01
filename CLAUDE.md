@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-**Docs Garage** — local Flask app for tinkering with office files in one place: extract structured rows (incl. test cases) from `.docx` via template extractors, filter and preview in the UI, export `.xlsx`, and shrink huge spreadsheets with column filters before download.
+**Docs Garage** — local Flask app for tinkering with office files in one place: extract structured rows (including test cases) from **`.docx`** or **digital `.pdf`** via template extractors, filter and preview in the UI, export `.xlsx`, and shrink huge spreadsheets with column filters before download.
+
+**PDF notes:** Only PDFs with an **extractable text layer** are supported. **OCR is not supported** (scanned PDFs usually yield no text). Tables are detected heuristically (`pdfplumber`) and rendered as pipe-delimited lines similar to Word output; messy layouts may need PDF-specific extractors or reader tuning.
 
 ## Running the app
 
@@ -38,18 +40,24 @@ pip install -r requirements.txt
 
 ## Architecture
 
-The pipeline is linear — one request, four steps:
+The document pipeline is linear — upload → normalize to plain text → pick extractor → rows → Excel:
 
-1. **`readers/docx_reader.py`** — converts `.docx` to structured plain text. Headings → `## text`, tables → pipe-delimited rows. Preserves document order via `_iter_block_items` (walks raw XML to interleave paragraphs and tables correctly, since `python-docx` doesn't do this natively).
+1. **`readers/docx_reader.py`** — converts `.docx` to structured plain text. Headings → `#` / `##`, tables → pipe-delimited rows. Preserves document order via `_iter_block_items`.
 
-2. **`llm_extractor.py`** — sends the plain text to an OpenAI-compatible chat endpoint. The system prompt instructs the model to return a JSON object with a `test_cases` array. Falls back from `json_object` response format to plain completion if the model returns 400/422 (handles older Ollama models). Attaches `file_name` to each extracted row.
+2. **`readers/pdf_reader.py`** — converts digital `.pdf` to plain text with **`pdfplumber`**: page text and **detected tables** are interleaved top-to-bottom; tables use the same ` | ` cell spacing style as Word output.
 
-3. **`app.py`** — Flask app with three routes:
-   - `GET /` — serves the UI
-   - `POST /extract` — accepts multipart file uploads, runs the pipeline per file, returns JSON `{rows, errors}`
-   - `POST /download` — accepts `{rows}` JSON, calls `to_excel`, streams back `.xlsx`
-   - `GET /config` — returns masked LLM config + live connection check
+3. **`readers/document_reader.py`** — `read_document(path)` dispatches on extension (`.docx` vs `.pdf`).
 
-4. **`exporter.py`** — converts the list of row dicts to an `openpyxl` workbook with styled headers, wrapped text, and frozen pane. Returns raw bytes (no temp files).
+4. **`extractors/`** — template modules implement `matches(doc_text)` and `extract(doc_text, filename)`; the first match wins (`extractors/__init__.py`).
 
-The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step. It calls `/extract` then `/download` to complete the flow client-side.
+5. **`app.py`** — Flask routes include:
+   - `GET /` — UI
+   - `POST /preview-doc` — single `.docx` or `.pdf` → parsed text preview
+   - `POST /extract` — multipart uploads → combined rows + per-file `file_results`
+   - `POST /download` — `{rows}` JSON → `.xlsx`
+   - `GET /samples/<path>` — static sample files
+   - Excel shrinker routes under `/excel/…`
+
+6. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`).
+
+The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step.
