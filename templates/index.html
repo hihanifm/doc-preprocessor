@@ -261,7 +261,7 @@
         const truncated = lines.slice(0, 100).join('\n') + (lines.length > 100 ? `\n\n… (${lines.length - 100} more lines)` : '');
         document.getElementById('doc-preview-text').value = truncated;
         document.getElementById('preview-file-label').textContent = `— ${selectedFiles[0].name}`;
-        docPreview.style.display = '';
+        docPreview.style.display = 'block';
       } catch (e) {
         setStatus(`Preview error: ${esc(e.message)}`, 'error');
       } finally {
@@ -297,7 +297,7 @@
           const tmpl = data.template ? ` &nbsp;|&nbsp; template: <strong>${esc(data.template)}</strong>` : '';
           setStatus(`Found <strong>${extractedRows.length}</strong> test case(s) across ${selectedFiles.length} file(s).${tmpl}`, 'ok');
           renderPreview(extractedRows);
-          downloadBtn.style.display = '';
+          downloadBtn.style.display = 'block';
         }
       } catch (err) {
         setStatus(`Error: ${esc(err.message)}`, 'error');
@@ -307,7 +307,7 @@
     });
 
     function renderPreview(rows) {
-      previewSection.style.display = '';
+      previewSection.style.display = 'block';
       previewTitle.textContent = `Preview — ${rows.length} test case(s)`;
       const COLS = ['file_name','test_id','test_name','description','preconditions','steps','expected_results'];
       previewBody.innerHTML = rows.map(row =>
