@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory
@@ -9,6 +10,26 @@ from readers.docx_reader import read_docx
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+@app.route("/health")
+def health():
+    exts = [e.name for e in extractor_registry.get_extractors()]
+    return jsonify({
+        "status": "ok",
+        "commit": _git_commit(),
+        "extractors": exts,
+        "extractor_count": len(exts),
+    })
 
 
 @app.route("/")
