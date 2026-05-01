@@ -112,6 +112,96 @@
       vertical-align: middle; margin-right: 6px;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Filters */
+    #filter-panel {
+      display: none;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+    }
+    #filter-panel.visible { display: block; }
+    #excel-shrink {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 18px 20px;
+      margin-bottom: 20px;
+      margin-top: 8px;
+    }
+    #filter-panel h2, #excel-shrink h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .hint { font-size: 0.8rem; color: #64748b; margin-bottom: 10px; line-height: 1.45; }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .filter-row select, .filter-row input[type="text"] {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+    }
+    .filter-row input[type="text"] { min-width: 160px; flex: 1; max-width: 280px; }
+    .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; min-height: 24px; }
+    .filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #e0f2fe;
+      color: #0369a1;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+    }
+    .filter-chip button {
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: #0369a1;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 0;
+    }
+    #peek-out-extract, #excel-peek-out {
+      font-size: 0.8rem;
+      color: #475569;
+      margin-top: 8px;
+      padding: 10px;
+      background: #f8fafc;
+      border-radius: 8px;
+      max-height: 140px;
+      overflow-y: auto;
+      display: none;
+    }
+    #peek-out-extract.visible, #excel-peek-out.visible { display: block; }
+    .btn-small {
+      padding: 7px 14px;
+      font-size: 0.82rem;
+      border-radius: 6px;
+      border: 1px solid #94a3b8;
+      background: #fff;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .btn-small:hover { background: #f1f5f9; }
+    .btn-small:disabled { opacity: 0.45; cursor: not-allowed; }
+    details.excel-details { margin-top: 16px; }
+    details.excel-details summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #334155;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 <body>
@@ -147,6 +237,31 @@
       <textarea id="doc-preview-text" readonly></textarea>
     </div>
 
+    <div id="filter-panel">
+      <h2>Filter extracted rows</h2>
+      <p class="hint">
+        Stack filters to shrink the result before download. Values are not listed automatically — use <strong>Sample values</strong> if you need a peek (capped).
+      </p>
+      <div class="filter-chips" id="filter-chips"></div>
+      <div class="filter-row">
+        <select id="filter-column" aria-label="Column"></select>
+        <select id="filter-mode" aria-label="Match mode">
+          <option value="contains">Contains</option>
+          <option value="equals">Equals</option>
+          <option value="starts_with">Starts with</option>
+          <option value="not_contains">Does not contain</option>
+        </select>
+        <input type="text" id="filter-needle" placeholder="Text to match (required)" autocomplete="off" />
+        <button type="button" class="btn-small" id="filter-add-btn">Add filter</button>
+        <button type="button" class="btn-small" id="filter-reset-btn">Clear all filters</button>
+      </div>
+      <div class="filter-row">
+        <button type="button" class="btn-small" id="peek-extract-btn">Sample values for selected column</button>
+        <span class="hint" style="margin:0;">(max 30 values, scans up to 8k rows)</span>
+      </div>
+      <div id="peek-out-extract"></div>
+    </div>
+
     <div id="preview-section">
       <h2 id="preview-title"></h2>
       <div class="table-wrap">
@@ -166,12 +281,57 @@
         </table>
       </div>
     </div>
+
+    <details class="excel-details">
+      <summary>Shrink an existing Excel file (.xlsx)</summary>
+      <div id="excel-shrink">
+        <p class="hint">
+          Large sheets: only column names and row counts load at first — no value list unless you click <strong>Peek sample values</strong>.
+        </p>
+        <div class="filter-row">
+          <input type="file" id="excel-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+          <button type="button" class="btn-small" id="excel-analyze-btn" disabled>Analyze sheet</button>
+        </div>
+        <div class="filter-row" id="excel-meta" style="display:none;">
+          <span id="excel-row-count" class="hint" style="margin:0;"></span>
+        </div>
+        <div class="filter-row">
+          <select id="excel-sheet" style="display:none;" aria-label="Sheet"></select>
+          <select id="excel-column" aria-label="Column"></select>
+          <select id="excel-mode">
+            <option value="contains">Contains</option>
+            <option value="equals">Equals</option>
+            <option value="starts_with">Starts with</option>
+            <option value="not_contains">Does not contain</option>
+          </select>
+          <input type="text" id="excel-needle" placeholder="Filter text (optional = match all)" autocomplete="off" />
+          <button type="button" class="btn-small" id="excel-download-btn" disabled>Download filtered sheet</button>
+        </div>
+        <div class="filter-row">
+          <button type="button" class="btn-small" id="excel-peek-btn" disabled>Peek sample values</button>
+          <span class="hint" style="margin:0;">(server cap 30 / scan 20k rows)</span>
+        </div>
+        <div id="excel-peek-out"></div>
+      </div>
+    </details>
   </div>
 
   <script>
     function esc(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
+
+    const COL_KEYS = ['file_name','test_id','test_name','description','preconditions','steps','expected_results'];
+    const COL_LABELS = {
+      file_name: 'File Name',
+      test_id: 'Test ID',
+      test_name: 'Test Name',
+      description: 'Description',
+      preconditions: 'Preconditions',
+      steps: 'Steps',
+      expected_results: 'Expected Results',
+    };
+    const PREVIEW_MAX = 200;
 
     const dropZone    = document.getElementById('drop-zone');
     const fileInput   = document.getElementById('file-input');
@@ -186,9 +346,239 @@
     const previewTitle   = document.getElementById('preview-title');
     const previewBody    = document.getElementById('preview-body');
     const docPreview     = document.getElementById('doc-preview');
+    const filterPanel    = document.getElementById('filter-panel');
+    const filterChips    = document.getElementById('filter-chips');
+    const peekOutExtract = document.getElementById('peek-out-extract');
 
     let selectedFiles = [];
     let extractedRows = [];
+    let activeFilters = [];
+
+    (function populateFilterColumnSelect() {
+      const sel = document.getElementById('filter-column');
+      sel.innerHTML = COL_KEYS.map(k => `<option value="${k}">${COL_LABELS[k]}</option>`).join('');
+    })();
+
+    function applyOneFilter(rows, column, mode, needle) {
+      const n = (needle || '').trim();
+      if (!n) return rows.slice();
+      const nl = n.toLowerCase();
+      return rows.filter(row => {
+        const cell = String(row[column] ?? '').trim().toLowerCase();
+        if (mode === 'contains') return cell.includes(nl);
+        if (mode === 'equals') return cell === nl;
+        if (mode === 'starts_with') return cell.startsWith(nl);
+        if (mode === 'not_contains') return !cell.includes(nl);
+        return true;
+      });
+    }
+
+    function computeFiltered() {
+      let rows = extractedRows;
+      for (const f of activeFilters) {
+        rows = applyOneFilter(rows, f.column, f.mode, f.needle);
+      }
+      return rows;
+    }
+
+    function renderFilterChips() {
+      filterChips.innerHTML = activeFilters.map((f, i) =>
+        `<span class="filter-chip" data-i="${i}">${esc(COL_LABELS[f.column])}: ${esc(f.mode)} "${esc(f.needle)}" <button type="button" aria-label="Remove filter">&times;</button></span>`
+      ).join('');
+    }
+
+    filterChips.addEventListener('click', e => {
+      const btn = e.target.closest('button');
+      const chip = e.target.closest('.filter-chip');
+      if (!btn || !chip) return;
+      activeFilters.splice(+chip.dataset.i, 1);
+      renderFilterChips();
+      renderPreview(computeFiltered());
+      peekOutExtract.classList.remove('visible');
+      peekOutExtract.innerHTML = '';
+    });
+
+    document.getElementById('filter-add-btn').addEventListener('click', () => {
+      const column = document.getElementById('filter-column').value;
+      const mode = document.getElementById('filter-mode').value;
+      const needle = document.getElementById('filter-needle').value.trim();
+      if (!needle) {
+        setStatus('Enter filter text before adding a filter.', 'error');
+        return;
+      }
+      activeFilters.push({ column, mode, needle });
+      document.getElementById('filter-needle').value = '';
+      renderFilterChips();
+      renderPreview(computeFiltered());
+      peekOutExtract.classList.remove('visible');
+      peekOutExtract.innerHTML = '';
+    });
+
+    document.getElementById('filter-reset-btn').addEventListener('click', () => {
+      activeFilters = [];
+      renderFilterChips();
+      renderPreview(computeFiltered());
+      peekOutExtract.classList.remove('visible');
+      peekOutExtract.innerHTML = '';
+    });
+
+    document.getElementById('peek-extract-btn').addEventListener('click', () => {
+      const column = document.getElementById('filter-column').value;
+      const rows = computeFiltered();
+      const seen = new Set();
+      const out = [];
+      let scanned = 0;
+      let truncated = false;
+      const maxVals = 30;
+      const maxScan = 8000;
+      for (const row of rows) {
+        if (scanned >= maxScan) { truncated = true; break; }
+        scanned++;
+        const v = String(row[column] ?? '').trim();
+        if (!v || seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+        if (out.length >= maxVals) { truncated = true; break; }
+      }
+      peekOutExtract.innerHTML =
+        '<strong>Sample values</strong> (' + out.length + ' distinct, scanned ' + scanned + ' rows)' +
+        (truncated ? ' — <em>truncated</em>' : '') + ':<br />' +
+        out.map(v => esc(v)).join(', ');
+      peekOutExtract.classList.add('visible');
+    });
+
+    /* ── Excel shrink ─────────────────────────────────────────────────────── */
+    const excelFileInput = document.getElementById('excel-file');
+    const excelAnalyzeBtn = document.getElementById('excel-analyze-btn');
+    const excelDownloadBtn = document.getElementById('excel-download-btn');
+    const excelPeekBtn = document.getElementById('excel-peek-btn');
+    const excelSheet = document.getElementById('excel-sheet');
+    const excelColumn = document.getElementById('excel-column');
+    const excelMode = document.getElementById('excel-mode');
+    const excelNeedle = document.getElementById('excel-needle');
+    const excelMeta = document.getElementById('excel-meta');
+    const excelRowCount = document.getElementById('excel-row-count');
+    const excelPeekOut = document.getElementById('excel-peek-out');
+    let excelFile = null;
+
+    async function loadExcelInfo(sheetIndex) {
+      if (!excelFile) return;
+      const fd = new FormData();
+      fd.append('file', excelFile);
+      fd.append('sheet_index', String(sheetIndex));
+      const r = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      excelSheet.innerHTML = '';
+      d.sheet_names.forEach((name, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = name;
+        excelSheet.appendChild(opt);
+      });
+      excelSheet.style.display = d.sheet_names.length > 1 ? 'inline-block' : 'none';
+      excelSheet.value = String(sheetIndex);
+
+      excelColumn.innerHTML = '';
+      d.columns.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        excelColumn.appendChild(opt);
+      });
+
+      excelMeta.style.display = 'block';
+      excelRowCount.textContent = `${d.row_count.toLocaleString()} data rows · ${d.columns.length} columns`;
+      excelDownloadBtn.disabled = d.columns.length === 0;
+      excelPeekBtn.disabled = d.columns.length === 0;
+      excelPeekOut.classList.remove('visible');
+      excelPeekOut.innerHTML = '';
+    }
+
+    excelFileInput.addEventListener('change', e => {
+      excelFile = e.target.files[0] || null;
+      excelAnalyzeBtn.disabled = !excelFile;
+      excelDownloadBtn.disabled = true;
+      excelPeekBtn.disabled = true;
+      excelMeta.style.display = 'none';
+      excelSheet.style.display = 'none';
+      excelPeekOut.classList.remove('visible');
+      excelPeekOut.innerHTML = '';
+    });
+
+    excelAnalyzeBtn.addEventListener('click', async () => {
+      if (!excelFile) return;
+      excelAnalyzeBtn.disabled = true;
+      try {
+        await loadExcelInfo(0);
+      } catch (err) {
+        setStatus(`Excel: ${esc(err.message)}`, 'error');
+      } finally {
+        excelAnalyzeBtn.disabled = !excelFile;
+      }
+    });
+
+    excelSheet.addEventListener('change', async () => {
+      if (!excelFile) return;
+      try {
+        await loadExcelInfo(+excelSheet.value);
+      } catch (err) {
+        setStatus(`Excel: ${esc(err.message)}`, 'error');
+      }
+    });
+
+    excelPeekBtn.addEventListener('click', async () => {
+      if (!excelFile || !excelColumn.value) return;
+      excelPeekBtn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', excelFile);
+        fd.append('column', excelColumn.value);
+        fd.append('sheet_index', excelSheet.style.display === 'none' ? '0' : excelSheet.value);
+        const r = await fetch('/excel/peek-column', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        excelPeekOut.innerHTML =
+          '<strong>Sample values</strong> (distinct ' + d.values.length + ', scanned ' + d.scanned_rows + ' rows)' +
+          (d.truncated ? ' — <em>truncated</em>' : '') + ':<br />' +
+          d.values.map(v => esc(v)).join(', ');
+        excelPeekOut.classList.add('visible');
+      } catch (err) {
+        setStatus(`Peek: ${esc(err.message)}`, 'error');
+      } finally {
+        excelPeekBtn.disabled = false;
+      }
+    });
+
+    excelDownloadBtn.addEventListener('click', async () => {
+      if (!excelFile || !excelColumn.value) return;
+      excelDownloadBtn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('file', excelFile);
+        fd.append('column', excelColumn.value);
+        fd.append('mode', excelMode.value);
+        fd.append('value', excelNeedle.value);
+        fd.append('sheet_index', excelSheet.style.display === 'none' ? '0' : excelSheet.value);
+        const resp = await fetch('/excel/download-filtered', { method: 'POST', body: fd });
+        const ct = resp.headers.get('Content-Type') || '';
+        if (!resp.ok) {
+          const errBody = ct.includes('json') ? (await resp.json()).error : await resp.text();
+          throw new Error(typeof errBody === 'string' ? errBody : errBody || 'Download failed');
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (excelFile.name.replace(/\.[^.]+$/, '') || 'filtered') + '_filtered.xlsx';
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        setStatus(`Excel download: ${esc(err.message)}`, 'error');
+      } finally {
+        excelDownloadBtn.disabled = false;
+      }
+    });
 
     // ── Drop zone ────────────────────────────────────────────────────────────
     dropZone.addEventListener('click', () => fileInput.click());
@@ -210,6 +600,8 @@
       previewBtn.disabled = !hasFiles;
       downloadBtn.style.display = 'none';
       extractedRows = [];
+      activeFilters = [];
+      filterPanel.classList.remove('visible');
       docPreview.style.display = 'none';
       clearPreview(); clearStatus();
     }
@@ -225,12 +617,28 @@
       const hasFiles = selectedFiles.length > 0;
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
-      if (!hasFiles) { downloadBtn.style.display = 'none'; docPreview.style.display = 'none'; clearPreview(); clearStatus(); }
+      if (!hasFiles) {
+        downloadBtn.style.display = 'none';
+        docPreview.style.display = 'none';
+        extractedRows = [];
+        activeFilters = [];
+        filterPanel.classList.remove('visible');
+        clearPreview();
+        clearStatus();
+      }
     }
 
     function setStatus(msg, cls) { statusEl.className = cls || ''; statusEl.innerHTML = msg; }
     function clearStatus() { statusEl.innerHTML = ''; statusEl.className = ''; errorList.innerHTML = ''; }
-    function clearPreview() { previewBody.innerHTML = ''; previewSection.style.display = 'none'; }
+    function clearPreview() {
+      previewBody.innerHTML = '';
+      previewSection.style.display = 'none';
+      activeFilters = [];
+      filterChips.innerHTML = '';
+      filterPanel.classList.remove('visible');
+      peekOutExtract.classList.remove('visible');
+      peekOutExtract.innerHTML = '';
+    }
 
     // ── Load sample ──────────────────────────────────────────────────────────
     sampleBtn.addEventListener('click', async () => {
@@ -273,7 +681,8 @@
     extractBtn.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
       extractBtn.disabled = true; downloadBtn.style.display = 'none';
-      clearPreview(); clearStatus();
+      clearPreview();
+      clearStatus();
       setStatus('<span class="spinner"></span>Extracting…', 'loading');
 
       const form = new FormData();
@@ -296,7 +705,10 @@
         } else {
           const tmpl = data.template ? ` &nbsp;|&nbsp; template: <strong>${esc(data.template)}</strong>` : '';
           setStatus(`Found <strong>${extractedRows.length}</strong> test case(s) across ${selectedFiles.length} file(s).${tmpl}`, 'ok');
-          renderPreview(extractedRows);
+          activeFilters = [];
+          renderFilterChips();
+          filterPanel.classList.add('visible');
+          renderPreview(computeFiltered());
           downloadBtn.style.display = 'block';
         }
       } catch (err) {
@@ -308,24 +720,35 @@
 
     function renderPreview(rows) {
       previewSection.style.display = 'block';
-      previewTitle.textContent = `Preview — ${rows.length} test case(s)`;
-      const COLS = ['file_name','test_id','test_name','description','preconditions','steps','expected_results'];
-      previewBody.innerHTML = rows.map(row =>
-        `<tr>${COLS.map(k => `<td>${esc((row[k] || '').toString())}</td>`).join('')}</tr>`
+      const total = rows.length;
+      const slice = rows.slice(0, PREVIEW_MAX);
+      const extra = total > PREVIEW_MAX
+        ? ` — preview shows first ${PREVIEW_MAX} of ${total} (full set in download)`
+        : '';
+      previewTitle.textContent = `Preview — ${total} row(s) after filters${extra}`;
+      previewBody.innerHTML = slice.map(row =>
+        `<tr>${COL_KEYS.map(k => `<td>${esc((row[k] || '').toString())}</td>`).join('')}</tr>`
       ).join('');
     }
 
     // ── Download ─────────────────────────────────────────────────────────────
     downloadBtn.addEventListener('click', async () => {
-      if (!extractedRows.length) return;
+      const rows = computeFiltered();
+      if (!rows.length) {
+        setStatus('No rows match the current filters.', 'error');
+        return;
+      }
       downloadBtn.disabled = true;
       try {
         const resp = await fetch('/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rows: extractedRows }),
+          body: JSON.stringify({ rows }),
         });
-        if (!resp.ok) throw new Error('Download failed');
+        if (!resp.ok) {
+          const t = await resp.text();
+          throw new Error(t || 'Download failed');
+        }
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');

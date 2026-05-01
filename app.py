@@ -5,8 +5,11 @@ import tempfile
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory
 
 import extractors as extractor_registry
+from excel_filter import filter_xlsx_to_bytes, peek_distinct, workbook_sheet_info
 from exporter import to_excel
 from readers.docx_reader import read_docx
+
+FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with"})
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
@@ -124,6 +127,108 @@ def download():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=test_cases.xlsx"},
     )
+
+
+def _cleanup_tmp(path) -> None:
+    if path:
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+
+
+@app.route("/excel/sheet-info", methods=["POST"])
+def excel_sheet_info():
+    """Return column headers and row count without listing cell values (large-sheet safe)."""
+    f = request.files.get("file")
+    if not f or not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"error": "Upload a .xlsx or .xlsm file"}), 400
+    tmp_path = None
+    try:
+        sheet_index = int(request.form.get("sheet_index", 0))
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            f.save(tmp.name)
+            tmp_path = tmp.name
+        headers, row_count, sheet_names = workbook_sheet_info(tmp_path, sheet_index)
+        return jsonify(
+            {"columns": headers, "row_count": row_count, "sheet_names": sheet_names}
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        _cleanup_tmp(tmp_path)
+
+
+@app.route("/excel/peek-column", methods=["POST"])
+def excel_peek_column():
+    """Optional: sample distinct values (capped) — only when user asks."""
+    f = request.files.get("file")
+    column = (request.form.get("column") or "").strip()
+    if not f or not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"error": "Upload a .xlsx or .xlsm file"}), 400
+    if not column:
+        return jsonify({"error": "column is required"}), 400
+    tmp_path = None
+    try:
+        sheet_index = int(request.form.get("sheet_index", 0))
+        max_values = min(int(request.form.get("max_values", 30)), 200)
+        max_scan = min(int(request.form.get("max_scan", 20000)), 500000)
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            f.save(tmp.name)
+            tmp_path = tmp.name
+        values, truncated, scanned = peek_distinct(
+            tmp_path,
+            column,
+            sheet_index=sheet_index,
+            max_values=max_values,
+            max_scan_rows=max_scan,
+        )
+        return jsonify(
+            {"values": values, "truncated": truncated, "scanned_rows": scanned}
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        _cleanup_tmp(tmp_path)
+
+
+@app.route("/excel/download-filtered", methods=["POST"])
+def excel_download_filtered():
+    """Shrink a spreadsheet by one column filter into a new workbook."""
+    f = request.files.get("file")
+    column = (request.form.get("column") or "").strip()
+    mode = (request.form.get("mode") or "contains").strip().lower()
+    needle = request.form.get("value") or ""
+    if not f or not f.filename.lower().endswith((".xlsx", ".xlsm")):
+        return jsonify({"error": "Upload a .xlsx or .xlsm file"}), 400
+    if not column:
+        return jsonify({"error": "column is required"}), 400
+    if mode not in FILTER_MODES:
+        return jsonify({"error": f"mode must be one of: {', '.join(sorted(FILTER_MODES))}"}), 400
+    tmp_path = None
+    try:
+        sheet_index = int(request.form.get("sheet_index", 0))
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            f.save(tmp.name)
+            tmp_path = tmp.name
+        xlsx_bytes = filter_xlsx_to_bytes(tmp_path, column, mode, needle, sheet_index)
+        base = os.path.splitext(f.filename)[0] or "filtered"
+        out_name = f"{base}_filtered.xlsx"
+        return Response(
+            xlsx_bytes,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={out_name}"},
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        _cleanup_tmp(tmp_path)
 
 
 @app.route("/samples/<path:filename>")
