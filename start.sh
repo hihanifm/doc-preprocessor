@@ -2,7 +2,7 @@
 set -e
 
 echo "============================================"
-echo " Document Formatter - Starting..."
+echo " Doc Clinic - Starting..."
 echo "============================================"
 
 # .env is optional (no required settings today). Create from example if you want overrides.

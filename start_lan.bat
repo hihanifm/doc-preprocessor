@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Document Formatter - LAN Mode
+echo  Doc Clinic - LAN Mode
 echo  (accessible from other machines)
 echo ============================================
 

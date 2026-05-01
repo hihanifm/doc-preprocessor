@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-**Document Formatter** — a local Flask web app for reshaping office documents: extract structured rows from `.docx` files (test plans and similar layouts) into `.xlsx`, filter rows in the browser, and shrink large spreadsheets via column filters before export.
+**Doc Clinic** — local Flask app for fixing up office files: extract structured rows (incl. test cases) from `.docx` via template extractors, filter and preview in the UI, export `.xlsx`, and shrink huge spreadsheets with column filters before download.
 
 ## Running the app
 

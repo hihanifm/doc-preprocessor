@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Document Formatter - Starting...
+echo  Doc Clinic - Starting...
 echo ============================================
 
 :: Check .env exists

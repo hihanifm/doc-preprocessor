@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Document Formatter</title>
+  <title>Doc Clinic</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -68,7 +68,7 @@
     .tab-panel { margin-bottom: 8px; }
     .tab-panel[hidden] { display: none !important; }
 
-    /* Shared drop zone — Documents tab (.docx) + Spreadsheet tab (.xlsx) */
+    /* Shared drop zone — test case extractor (.docx) + spreadsheet shrinker (.xlsx) */
     .drop-zone {
       border: 2px dashed #c5cdd8;
       border-radius: var(--radius);
@@ -305,12 +305,12 @@
 </head>
 <body>
   <div class="container">
-    <h1>Document Formatter</h1>
-    <p class="subtitle" id="page-subtitle">Shape Word and Excel files — extract rows, filter columns, download tidy spreadsheets.</p>
+    <h1>Doc Clinic</h1>
+    <p class="subtitle" id="page-subtitle">Bring Word &amp; Excel to the clinic — pull out test cases (plus other structured rows), filter what you need, leave with a cleaner spreadsheet.</p>
 
     <div class="tab-bar" role="tablist" aria-label="Views">
-      <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Documents</button>
-      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheets</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
     </div>
 
     <div id="status"></div>
@@ -455,9 +455,9 @@
     };
     const PREVIEW_MAX = 200;
     const SUBTITLE_CONVERTER =
-      'Upload Word (.docx) files — we pull structured rows (e.g. test plans) into a table you can filter and export.';
+      'Test case extractor: drop .docx files — we pull structured rows (test cases included), stack filters, peek values on demand, export Excel.';
     const SUBTITLE_EXCEL =
-      'Load an Excel workbook, preview rows only when you ask, filter by column, then download a smaller .xlsx.';
+      'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
 
     const pageSubtitle = document.getElementById('page-subtitle');
     document.querySelectorAll('.tab-bar .tab-trigger').forEach(btn => {
