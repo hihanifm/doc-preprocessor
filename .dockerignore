@@ -1,0 +1,10 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.env
+data/
+.git
+*.bat
+start.sh
+start_lan.bat

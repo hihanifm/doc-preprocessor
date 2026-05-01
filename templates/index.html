@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test Plan Converter</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5;
+      color: #222;
+      min-height: 100vh;
+      padding: 32px 16px;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; }
+
+    h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 0.9rem; margin-bottom: 28px; }
+
+    /* Drop zone */
+    #drop-zone {
+      border: 2px dashed #a0aec0;
+      border-radius: 10px;
+      background: #fff;
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      margin-bottom: 20px;
+    }
+    #drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
+    #drop-zone svg { display: block; margin: 0 auto 12px; opacity: 0.4; }
+    #drop-zone p { color: #555; font-size: 0.95rem; }
+    #drop-zone small { color: #999; font-size: 0.8rem; }
+    #file-input { display: none; }
+
+    /* File list */
+    #file-list { margin-bottom: 16px; }
+    .file-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: #e2e8f0; border-radius: 6px;
+      padding: 4px 10px; margin: 4px; font-size: 0.82rem;
+    }
+    .file-chip button {
+      border: none; background: none; cursor: pointer;
+      color: #718096; font-size: 1rem; line-height: 1;
+    }
+
+    /* Buttons */
+    .btn-row { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+    button.primary, button.success {
+      padding: 10px 22px; border: none; border-radius: 7px;
+      font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: opacity 0.15s;
+    }
+    button.primary { background: #3b82f6; color: #fff; }
+    button.success { background: #16a34a; color: #fff; display: none; }
+    button.outline {
+      background: none; color: #3b82f6; border: 1.5px solid #3b82f6;
+      padding: 10px 22px; border-radius: 7px; font-size: 0.9rem;
+      font-weight: 600; cursor: pointer;
+    }
+    button.outline:hover { background: #eff6ff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Status */
+    #status { font-size: 0.88rem; margin-bottom: 16px; min-height: 20px; }
+    #status.error { color: #dc2626; }
+    #status.ok { color: #16a34a; }
+    #status.loading { color: #3b82f6; }
+
+    /* Errors list */
+    #error-list { margin-bottom: 16px; }
+    .error-item {
+      background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b;
+      border-radius: 7px; padding: 10px 14px; font-size: 0.82rem; margin: 4px 0;
+    }
+
+    /* Doc preview */
+    #doc-preview { display: none; margin-bottom: 24px; }
+    #doc-preview h2 { font-size: 1rem; font-weight: 600; margin-bottom: 8px; }
+    #doc-preview textarea {
+      width: 100%; height: 260px; padding: 10px 12px;
+      border: 1px solid #e2e8f0; border-radius: 8px;
+      font-family: "SF Mono", "Fira Code", monospace; font-size: 0.75rem;
+      background: #f8fafc; color: #334155; resize: vertical; line-height: 1.5;
+    }
+
+    /* Preview table */
+    #preview-section { display: none; }
+    #preview-section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 10px; }
+    .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid #e2e8f0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; background: #fff; }
+    thead th {
+      background: #1e3a5f; color: #fff; padding: 10px 12px;
+      text-align: left; white-space: nowrap; font-weight: 600;
+    }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody td {
+      padding: 8px 12px; border-bottom: 1px solid #e2e8f0;
+      vertical-align: top; max-width: 320px;
+      white-space: pre-wrap; word-break: break-word;
+    }
+
+    /* Spinner */
+    .spinner {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid #ddd; border-top-color: #3b82f6;
+      border-radius: 50%; animation: spin 0.6s linear infinite;
+      vertical-align: middle; margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Test Plan → Excel Converter</h1>
+    <p class="subtitle">Upload .docx test plan files to extract test cases into a spreadsheet.</p>
+
+    <div id="drop-zone">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <p>Drag &amp; drop .docx files here, or <strong>click to browse</strong></p>
+      <small>Multiple files supported</small>
+      <input type="file" id="file-input" accept=".docx" multiple />
+    </div>
+
+    <div id="file-list"></div>
+
+    <div class="btn-row">
+      <button class="primary" id="extract-btn" disabled>Extract Test Cases</button>
+      <button class="success" id="download-btn">Download Excel</button>
+      <button class="outline" id="preview-btn" disabled>Preview Parsed Text</button>
+      <button class="outline" id="sample-btn">Load Sample</button>
+    </div>
+
+    <div id="status"></div>
+    <div id="error-list"></div>
+
+    <div id="doc-preview">
+      <h2>Parsed Document Text <span id="preview-file-label" style="font-weight:400;color:#666;"></span></h2>
+      <textarea id="doc-preview-text" readonly></textarea>
+    </div>
+
+    <div id="preview-section">
+      <h2 id="preview-title"></h2>
+      <div class="table-wrap">
+        <table id="preview-table">
+          <thead>
+            <tr>
+              <th>File Name</th>
+              <th>Test ID</th>
+              <th>Test Name</th>
+              <th>Description</th>
+              <th>Preconditions / Applicability</th>
+              <th>Steps</th>
+              <th>Expected Results</th>
+            </tr>
+          </thead>
+          <tbody id="preview-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    const dropZone    = document.getElementById('drop-zone');
+    const fileInput   = document.getElementById('file-input');
+    const fileList    = document.getElementById('file-list');
+    const extractBtn  = document.getElementById('extract-btn');
+    const downloadBtn = document.getElementById('download-btn');
+    const previewBtn  = document.getElementById('preview-btn');
+    const sampleBtn   = document.getElementById('sample-btn');
+    const statusEl    = document.getElementById('status');
+    const errorList   = document.getElementById('error-list');
+    const previewSection = document.getElementById('preview-section');
+    const previewTitle   = document.getElementById('preview-title');
+    const previewBody    = document.getElementById('preview-body');
+    const docPreview     = document.getElementById('doc-preview');
+
+    let selectedFiles = [];
+    let extractedRows = [];
+
+    // ── Drop zone ────────────────────────────────────────────────────────────
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault(); dropZone.classList.remove('dragover');
+      addFiles([...e.dataTransfer.files]);
+    });
+    fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
+
+    function addFiles(files) {
+      files.filter(f => f.name.toLowerCase().endsWith('.docx')).forEach(f => {
+        if (!selectedFiles.find(x => x.name === f.name)) selectedFiles.push(f);
+      });
+      renderFileList();
+      const hasFiles = selectedFiles.length > 0;
+      extractBtn.disabled = !hasFiles;
+      previewBtn.disabled = !hasFiles;
+      downloadBtn.style.display = 'none';
+      extractedRows = [];
+      docPreview.style.display = 'none';
+      clearPreview(); clearStatus();
+    }
+
+    function renderFileList() {
+      fileList.innerHTML = selectedFiles.map((f, i) =>
+        `<span class="file-chip">${esc(f.name)}<button onclick="removeFile(${i})">&times;</button></span>`
+      ).join('');
+    }
+
+    function removeFile(i) {
+      selectedFiles.splice(i, 1); renderFileList();
+      const hasFiles = selectedFiles.length > 0;
+      extractBtn.disabled = !hasFiles;
+      previewBtn.disabled = !hasFiles;
+      if (!hasFiles) { downloadBtn.style.display = 'none'; docPreview.style.display = 'none'; clearPreview(); clearStatus(); }
+    }
+
+    function setStatus(msg, cls) { statusEl.className = cls || ''; statusEl.innerHTML = msg; }
+    function clearStatus() { statusEl.innerHTML = ''; statusEl.className = ''; errorList.innerHTML = ''; }
+    function clearPreview() { previewBody.innerHTML = ''; previewSection.style.display = 'none'; }
+
+    // ── Load sample ──────────────────────────────────────────────────────────
+    sampleBtn.addEventListener('click', async () => {
+      sampleBtn.disabled = true; sampleBtn.textContent = 'Loading…';
+      try {
+        const resp = await fetch('/samples/sample_test_plan.docx');
+        if (!resp.ok) throw new Error('Could not fetch sample');
+        const blob = await resp.blob();
+        addFiles([new File([blob], 'sample_test_plan.docx', { type: blob.type })]);
+      } catch (e) {
+        setStatus(`Error: ${esc(e.message)}`, 'error');
+      } finally {
+        sampleBtn.disabled = false; sampleBtn.textContent = 'Load Sample';
+      }
+    });
+
+    // ── Preview parsed text ──────────────────────────────────────────────────
+    previewBtn.addEventListener('click', async () => {
+      if (!selectedFiles.length) return;
+      previewBtn.disabled = true; previewBtn.textContent = 'Parsing…';
+      const form = new FormData();
+      form.append('file', selectedFiles[0]);
+      try {
+        const r = await fetch('/preview-doc', { method: 'POST', body: form });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        const lines = d.document_text.split('\n');
+        const truncated = lines.slice(0, 100).join('\n') + (lines.length > 100 ? `\n\n… (${lines.length - 100} more lines)` : '');
+        document.getElementById('doc-preview-text').value = truncated;
+        document.getElementById('preview-file-label').textContent = `— ${selectedFiles[0].name}`;
+        docPreview.style.display = '';
+      } catch (e) {
+        setStatus(`Preview error: ${esc(e.message)}`, 'error');
+      } finally {
+        previewBtn.disabled = false; previewBtn.textContent = 'Preview Parsed Text';
+      }
+    });
+
+    // ── Extract ──────────────────────────────────────────────────────────────
+    extractBtn.addEventListener('click', async () => {
+      if (!selectedFiles.length) return;
+      extractBtn.disabled = true; downloadBtn.style.display = 'none';
+      clearPreview(); clearStatus();
+      setStatus('<span class="spinner"></span>Extracting…', 'loading');
+
+      const form = new FormData();
+      selectedFiles.forEach(f => form.append('files', f));
+
+      try {
+        const resp = await fetch('/extract', { method: 'POST', body: form });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Server error');
+
+        extractedRows = data.rows || [];
+        const errors = data.errors || [];
+
+        if (errors.length) {
+          errorList.innerHTML = errors.map(e => `<div class="error-item">${esc(e)}</div>`).join('');
+        }
+
+        if (extractedRows.length === 0) {
+          setStatus('No test cases found.', 'error');
+        } else {
+          const tmpl = data.template ? ` &nbsp;|&nbsp; template: <strong>${esc(data.template)}</strong>` : '';
+          setStatus(`Found <strong>${extractedRows.length}</strong> test case(s) across ${selectedFiles.length} file(s).${tmpl}`, 'ok');
+          renderPreview(extractedRows);
+          downloadBtn.style.display = '';
+        }
+      } catch (err) {
+        setStatus(`Error: ${esc(err.message)}`, 'error');
+      } finally {
+        extractBtn.disabled = false;
+      }
+    });
+
+    function renderPreview(rows) {
+      previewSection.style.display = '';
+      previewTitle.textContent = `Preview — ${rows.length} test case(s)`;
+      const COLS = ['file_name','test_id','test_name','description','preconditions','steps','expected_results'];
+      previewBody.innerHTML = rows.map(row =>
+        `<tr>${COLS.map(k => `<td>${esc((row[k] || '').toString())}</td>`).join('')}</tr>`
+      ).join('');
+    }
+
+    // ── Download ─────────────────────────────────────────────────────────────
+    downloadBtn.addEventListener('click', async () => {
+      if (!extractedRows.length) return;
+      downloadBtn.disabled = true;
+      try {
+        const resp = await fetch('/download', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rows: extractedRows }),
+        });
+        if (!resp.ok) throw new Error('Download failed');
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'test_cases.xlsx'; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        setStatus(`Download error: ${esc(err.message)}`, 'error');
+      } finally {
+        downloadBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

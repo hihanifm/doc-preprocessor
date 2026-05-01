@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# App runtime
+.env
+data/
+config.json
+pip-cache/*.whl
+
+# macOS
+.DS_Store
+
+# Uploads / temp
+*.docx
+!samples/*.docx
+!static/*.docx
