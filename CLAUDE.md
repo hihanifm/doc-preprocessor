@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-**Test Plan Converter** — a local Flask web app that accepts `.docx` test plan documents, sends their text content to an OpenAI-compatible LLM, and returns extracted test cases as a downloadable `.xlsx` spreadsheet.
+**Document Formatter** — a local Flask web app for reshaping office documents: extract structured rows from `.docx` files (test plans and similar layouts) into `.xlsx`, filter rows in the browser, and shrink large spreadsheets via column filters before export.
 
 ## Running the app
 

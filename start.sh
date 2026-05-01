@@ -2,7 +2,7 @@
 set -e
 
 echo "============================================"
-echo " Test Plan Converter - Starting..."
+echo " Document Formatter - Starting..."
 echo "============================================"
 
 # .env is optional (no required settings today). Create from example if you want overrides.

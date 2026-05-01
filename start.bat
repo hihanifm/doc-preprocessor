@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Test Plan Converter - Starting...
+echo  Document Formatter - Starting...
 echo ============================================
 
 :: Check .env exists

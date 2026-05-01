@@ -2,7 +2,7 @@
 setlocal
 
 echo ============================================
-echo  Test Plan Converter - LAN Mode
+echo  Document Formatter - LAN Mode
 echo  (accessible from other machines)
 echo ============================================
 

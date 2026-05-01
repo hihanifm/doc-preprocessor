@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Test Plan Converter</title>
+  <title>Document Formatter</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -68,7 +68,7 @@
     .tab-panel { margin-bottom: 8px; }
     .tab-panel[hidden] { display: none !important; }
 
-    /* Shared drop zone — Converter (.docx) + Shrink Excel (.xlsx) */
+    /* Shared drop zone — Documents tab (.docx) + Spreadsheet tab (.xlsx) */
     .drop-zone {
       border: 2px dashed #c5cdd8;
       border-radius: var(--radius);
@@ -305,12 +305,12 @@
 </head>
 <body>
   <div class="container">
-    <h1>Test Plan → Excel Converter</h1>
-    <p class="subtitle" id="page-subtitle">Upload .docx test plan files to extract test cases into a spreadsheet.</p>
+    <h1>Document Formatter</h1>
+    <p class="subtitle" id="page-subtitle">Shape Word and Excel files — extract rows, filter columns, download tidy spreadsheets.</p>
 
     <div class="tab-bar" role="tablist" aria-label="Views">
-      <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Converter</button>
-      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Shrink Excel</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Documents</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheets</button>
     </div>
 
     <div id="status"></div>
@@ -454,9 +454,10 @@
       expected_results: 'Expected Results',
     };
     const PREVIEW_MAX = 200;
-    const SUBTITLE_CONVERTER = 'Upload .docx test plan files to extract test cases into a spreadsheet.';
+    const SUBTITLE_CONVERTER =
+      'Upload Word (.docx) files — we pull structured rows (e.g. test plans) into a table you can filter and export.';
     const SUBTITLE_EXCEL =
-      'Load a spreadsheet, preview rows only when you ask, then filter and download a smaller .xlsx.';
+      'Load an Excel workbook, preview rows only when you ask, filter by column, then download a smaller .xlsx.';
 
     const pageSubtitle = document.getElementById('page-subtitle');
     document.querySelectorAll('.tab-bar .tab-trigger').forEach(btn => {
