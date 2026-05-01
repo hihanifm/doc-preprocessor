@@ -1,6 +1,6 @@
 # Port convention (BASE_PORT = 5000) — see refs/docker-lab-guidelines.md
 #   prod  →  5000   (single origin)
-#   dev   →  5001   (Flask dev server with reload)
+#   dev   →  35050 host → 5000 in container (lab: avoid busy low ports)
 #
 # Dev and prod can run simultaneously without port collisions.
 # Optional: export COMPOSE_PROJECT_NAME=doc-preprocessor on shared hosts to isolate networks/volumes.
@@ -40,7 +40,7 @@ services:
     <<: *common
     profiles: ["dev"]
     ports:
-      - "5001:5000"
+      - "35050:5000"
     environment:
       FLASK_DEBUG: "1"
     command: ["python", "-m", "flask", "--app", "app", "run", "--host", "0.0.0.0", "--port", "5000"]

@@ -68,8 +68,8 @@
     .tab-panel { margin-bottom: 8px; }
     .tab-panel[hidden] { display: none !important; }
 
-    /* Drop zone */
-    #drop-zone {
+    /* Shared drop zone — Converter (.docx) + Shrink Excel (.xlsx) */
+    .drop-zone {
       border: 2px dashed #c5cdd8;
       border-radius: var(--radius);
       background: var(--surface);
@@ -80,11 +80,22 @@
       margin-bottom: 20px;
       box-shadow: var(--shadow);
     }
-    #drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
-    #drop-zone svg { display: block; margin: 0 auto 12px; opacity: 0.4; }
-    #drop-zone p { color: #555; font-size: 0.95rem; }
-    #drop-zone small { color: #999; font-size: 0.8rem; }
-    #file-input { display: none; }
+    .drop-zone.dragover { border-color: #3b82f6; background: #eff6ff; }
+    .drop-zone.drop-zone--has-file {
+      border-color: #93c5fd;
+      background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+    }
+    .drop-zone svg { display: block; margin: 0 auto 12px; opacity: 0.4; }
+    .drop-zone p { color: #555; font-size: 0.95rem; }
+    .drop-zone small { color: #999; font-size: 0.8rem; }
+    .drop-zone__picked {
+      margin-top: 14px;
+      font-size: 0.88rem;
+      color: #1d4ed8;
+      font-weight: 600;
+      word-break: break-all;
+    }
+    .drop-zone input[type="file"] { display: none; }
 
     /* File list */
     #file-list { margin-bottom: 16px; }
@@ -307,7 +318,7 @@
 
     <div id="panel-converter" class="tab-panel" role="tabpanel" aria-labelledby="tab-converter">
 
-    <div id="drop-zone">
+    <div id="drop-zone" class="drop-zone">
       <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
         <polyline points="17 8 12 3 7 8"/>
@@ -384,10 +395,22 @@
         <p class="hint">
           Large sheets: only column names and row counts load when you analyze — no heavy lists until you click preview or peek.
         </p>
-        <div class="filter-row">
-          <input type="file" id="excel-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
-          <button type="button" class="btn btn--primary btn--sm" id="excel-analyze-btn" disabled>Analyze sheet</button>
-          <button type="button" class="btn btn--secondary btn--sm" id="excel-preview-rows-btn" disabled>Preview top rows</button>
+
+        <div id="excel-drop-zone" class="drop-zone">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Drag &amp; drop an <strong>.xlsx</strong> or <strong>.xlsm</strong> here, or <strong>click to browse</strong></p>
+          <small>One workbook at a time</small>
+          <p class="drop-zone__picked" id="excel-file-picked" hidden><span id="excel-file-display"></span></p>
+          <input type="file" id="excel-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-label="Choose Excel workbook" />
+        </div>
+
+        <div class="btn-row">
+          <button type="button" class="btn btn--primary" id="excel-analyze-btn" disabled>Analyze sheet</button>
+          <button type="button" class="btn btn--secondary" id="excel-preview-rows-btn" disabled>Preview top rows</button>
         </div>
         <div class="filter-row" id="excel-meta" style="display:none;">
           <span id="excel-row-count" class="hint" style="margin:0;"></span>
@@ -403,10 +426,10 @@
             <option value="not_contains">Does not contain</option>
           </select>
           <input type="text" id="excel-needle" placeholder="Filter text (optional = match all)" autocomplete="off" />
-          <button type="button" class="btn btn--primary btn--sm" id="excel-download-btn" disabled>Download filtered sheet</button>
+          <button type="button" class="btn btn--primary" id="excel-download-btn" disabled>Download filtered sheet</button>
         </div>
         <div class="filter-row">
-          <button type="button" class="btn btn--muted btn--sm" id="excel-peek-btn" disabled>Peek distinct values (table)</button>
+          <button type="button" class="btn btn--muted" id="excel-peek-btn" disabled>Peek distinct values (table)</button>
           <span class="hint" style="margin:0;">On demand · server cap 30 values / 20k rows scanned</span>
         </div>
         <div id="excel-peek-out" class="peek-panel"></div>
@@ -590,6 +613,7 @@
 
     /* ── Excel shrink ─────────────────────────────────────────────────────── */
     const excelFileInput = document.getElementById('excel-file');
+    const excelDropZone = document.getElementById('excel-drop-zone');
     const excelAnalyzeBtn = document.getElementById('excel-analyze-btn');
     const excelDownloadBtn = document.getElementById('excel-download-btn');
     const excelPeekBtn = document.getElementById('excel-peek-btn');
@@ -602,7 +626,49 @@
     const excelPeekOut = document.getElementById('excel-peek-out');
     const excelPreviewRowsBtn = document.getElementById('excel-preview-rows-btn');
     const excelRowsPreview = document.getElementById('excel-rows-preview');
+    const excelFileDisplay = document.getElementById('excel-file-display');
     let excelFile = null;
+
+    function syncExcelFileLabel() {
+      const picked = document.getElementById('excel-file-picked');
+      if (excelFile) {
+        excelFileDisplay.textContent = excelFile.name;
+        picked.hidden = false;
+        excelDropZone.classList.add('drop-zone--has-file');
+      } else {
+        excelFileDisplay.textContent = '';
+        picked.hidden = true;
+        excelDropZone.classList.remove('drop-zone--has-file');
+      }
+    }
+
+    function attachExcelFile(file) {
+      if (!file || !/\.(xlsx|xlsm)$/i.test(file.name)) {
+        setStatus('Please use an .xlsx or .xlsm workbook.', 'error');
+        return;
+      }
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      excelFileInput.files = dt.files;
+      excelFileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    excelDropZone.addEventListener('click', () => excelFileInput.click());
+    excelDropZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      excelDropZone.classList.add('dragover');
+    });
+    excelDropZone.addEventListener('dragleave', () => excelDropZone.classList.remove('dragover'));
+    excelDropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      excelDropZone.classList.remove('dragover');
+      const f = [...e.dataTransfer.files].find(x => /\.(xlsx|xlsm)$/i.test(x.name));
+      if (!f) {
+        setStatus('Drop an .xlsx or .xlsm workbook.', 'error');
+        return;
+      }
+      attachExcelFile(f);
+    });
 
     async function loadExcelInfo(sheetIndex) {
       if (!excelFile) return;
@@ -643,6 +709,7 @@
 
     excelFileInput.addEventListener('change', e => {
       excelFile = e.target.files[0] || null;
+      syncExcelFileLabel();
       excelAnalyzeBtn.disabled = !excelFile;
       excelDownloadBtn.disabled = true;
       excelPeekBtn.disabled = true;

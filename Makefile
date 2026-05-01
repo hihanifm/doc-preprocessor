@@ -11,7 +11,7 @@ endif
 
 COMPOSE := $(DOCKER_COMPOSE_ENV) docker compose
 
-# Single Flask service; ports from docker-compose.yml (BASE_PORT=5000 → prod :5000, dev :5001).
+# Single Flask service; ports from docker-compose.yml (prod :5000, dev host :35050).
 .PHONY: help up down down-all build rebuild restart logs logs-dev ps dev e2e-up \
 	prod prod-down down-prod build-prod logs-prod \
 	run run-lan pip-cache build-dev
@@ -21,7 +21,7 @@ help:
 	@echo "Docker — refs/docker-lab-guidelines.md"
 	@echo ""
 	@echo "  Daily dev"
-	@echo "    make build && make up   Build image, start dev → http://<host>:5001"
+	@echo "    make build && make up   Build image, start dev → http://<host>:35050"
 	@echo "    make dev                Same intent as CI: up -d --build"
 	@echo ""
 	@echo "  After Dockerfile / requirements.txt changes"
