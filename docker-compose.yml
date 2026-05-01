@@ -1,13 +1,15 @@
-# Port convention (BASE_PORT = 5000)
+# Port convention (BASE_PORT = 5000) — see refs/docker-lab-guidelines.md
 #   prod  →  5000   (single origin)
 #   dev   →  5001   (Flask dev server with reload)
 #
 # Dev and prod can run simultaneously without port collisions.
+# Optional: export COMPOSE_PROJECT_NAME=doc-preprocessor on shared hosts to isolate networks/volumes.
 
 x-proxy-args: &proxy-args
   HTTP_PROXY: ${HTTP_PROXY:-}
   HTTPS_PROXY: ${HTTPS_PROXY:-}
-  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
+  # Broaden defaults so local/registry traffic is less likely to be forced through a bad proxy.
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1,127.0.0.0/8}
 
 x-common: &common
   build:
