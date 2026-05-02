@@ -18,6 +18,7 @@ from excel_filter import (
     workbook_sheet_info,
 )
 from exporter import to_excel
+from llm_extractor import LlmExtractError, extract_with_llm, fetch_model_ids, validate_llm_form
 from readers.document_reader import read_document
 
 
@@ -112,6 +113,23 @@ def preview_doc():
                 pass
 
 
+@app.route("/llm-models", methods=["POST"])
+def llm_models():
+    """List model IDs from an OpenAI-compatible GET /v1/models or Ollama /api/tags (server-side only)."""
+    if not request.is_json:
+        return jsonify({"error": "Send JSON with Content-Type application/json: llm_base_url, llm_api_key (optional)."}), 400
+    body = request.get_json(silent=True) or {}
+    llm_base_url = (body.get("llm_base_url") or "").strip()
+    llm_api_key = (body.get("llm_api_key") or "").strip()
+    if not llm_base_url:
+        return jsonify({"error": "llm_base_url is required."}), 400
+    try:
+        models = fetch_model_ids(llm_base_url, llm_api_key)
+        return jsonify({"models": models})
+    except LlmExtractError as e:
+        return jsonify({"error": str(e)}), 400
+
+
 @app.route("/support-upload", methods=["POST"])
 def support_upload():
     """Save one .docx/.pdf under SUPPORT_UPLOAD_DIR (default: ./support_uploads)."""
@@ -145,6 +163,18 @@ def extract():
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No files uploaded"}), 400
+
+    mode = (request.form.get("mode") or "template").strip().lower()
+    llm_base_url = ""
+    llm_api_key = ""
+    llm_model = ""
+    if mode == "llm":
+        llm_base_url = request.form.get("llm_base_url", "").strip()
+        llm_api_key = request.form.get("llm_api_key", "").strip()
+        llm_model = request.form.get("llm_model", "").strip()
+        form_err = validate_llm_form(llm_base_url, llm_api_key, llm_model)
+        if form_err:
+            return jsonify({"error": form_err}), 400
 
     all_rows = []
     errors = []
@@ -188,6 +218,41 @@ def extract():
                         "reason": "empty_text",
                     }
                 )
+                continue
+
+            if mode == "llm":
+                tpl_label = f"LLM ({llm_model})"
+                try:
+                    rows = extract_with_llm(
+                        doc_text,
+                        base_url=llm_base_url,
+                        api_key=llm_api_key,
+                        model=llm_model,
+                        file_name=display_name,
+                    )
+                    all_rows.extend(rows)
+                    if tpl_label not in templates_order:
+                        templates_order.append(tpl_label)
+                    file_results.append(
+                        {
+                            "filename": display_name,
+                            "template": tpl_label,
+                            "rows": len(rows),
+                            "ok": True,
+                        }
+                    )
+                except LlmExtractError as le:
+                    errors.append(f"{display_name}: {le}")
+                    file_results.append(
+                        {
+                            "filename": display_name,
+                            "template": None,
+                            "rows": 0,
+                            "ok": False,
+                            "reason": "llm_error",
+                            "detail": str(le),
+                        }
+                    )
                 continue
 
             ext = extractor_registry.find_extractor(doc_text)

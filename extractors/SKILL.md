@@ -11,7 +11,7 @@ Use this when you need to **support a new Word or PDF layout**, **debug “no te
 
 - **Not** an LLM prompt. Extractors are **Python classes** that implement deterministic parsing.
 - Each extractor is a **template profile**: “if the document looks like *this*, parse it *this way*.”
-- The web app reads `.docx` or digital `.pdf` → **plain text** (`readers/document_reader.read_document`, which uses `docx_reader` / `pdf_reader`) → picks **one** extractor whose `matches(doc_text)` is true → calls `extract(doc_text, filename)` → builds rows → Excel.
+- The web app reads `.docx` or digital `.pdf` → **plain text** (`readers/document_reader.read_document`, which uses `docx_reader` / `pdf_reader`) → either picks **one** template extractor whose `matches(doc_text)` is true and calls `extract(doc_text, filename)`, **or** (user choice) sends text to an **OpenAI-compatible LLM** (`llm_extractor.py`) with the same row shape → builds rows → Excel.
 
 ## End-to-end pipeline (for agents)
 

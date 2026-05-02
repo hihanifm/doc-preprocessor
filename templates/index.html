@@ -330,6 +330,71 @@
       font-size: 0.9rem;
     }
     #support-upload-panel .hint { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; }
+
+    #extract-mode-panel {
+      margin-bottom: 18px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      box-shadow: var(--shadow);
+      font-size: 0.88rem;
+    }
+    #extract-mode-panel .mode-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px 24px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    #extract-mode-panel label.mode-opt {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      color: #334155;
+    }
+    #llm-settings {
+      display: none;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e2e8f0;
+    }
+    #llm-settings.visible { display: block; }
+    #llm-settings .llm-field-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      margin-bottom: 10px;
+    }
+    #llm-settings label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    #llm-settings input[type="text"],
+    #llm-settings input[type="password"],
+    #llm-settings input[type="url"] {
+      min-width: 220px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+    }
+    #llm-settings .hint { margin: 0 0 8px; font-size: 0.78rem; }
+    #llm-models-hint {
+      margin: 0 0 8px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-height: 1.2em;
+    }
+    #llm-models-hint.llm-models-hint--err { color: #b91c1c; }
+    #llm-models-hint.llm-models-hint--ok { color: #15803d; }
   </style>
 </head>
 <body>
@@ -360,6 +425,26 @@
     </div>
 
     <div id="file-list"></div>
+
+    <div id="extract-mode-panel">
+      <div class="mode-row">
+        <span style="font-weight:650;color:#475569;">Extraction:</span>
+        <label class="mode-opt"><input type="radio" name="extract-mode" value="template" checked /> Template extractors</label>
+        <label class="mode-opt"><input type="radio" name="extract-mode" value="llm" /> LLM (OpenAI-compatible)</label>
+      </div>
+      <div id="llm-settings">
+        <p class="hint">Endpoint and credentials are sent only with this request — not stored on the server. Use HTTPS if not on localhost.</p>
+        <datalist id="llm-model-suggestions"></datalist>
+        <div class="llm-field-row">
+          <label>Base URL <input type="url" id="llm-base-url" placeholder="https://api.openai.com/v1" autocomplete="off" /></label>
+          <label>API key <input type="password" id="llm-api-key" placeholder="sk-… or ollama" autocomplete="off" /></label>
+          <label>Model <input type="text" id="llm-model" list="llm-model-suggestions" placeholder="gpt-4o-mini" autocomplete="off" /></label>
+          <button type="button" class="btn btn--muted btn--sm" id="llm-fetch-models">Fetch models</button>
+          <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-preset">Use Ollama defaults</button>
+        </div>
+        <p id="llm-models-hint" class="hint" aria-live="polite"></p>
+      </div>
+    </div>
 
     <div id="support-upload-panel" aria-live="polite">
       <strong>Need a new format?</strong>
@@ -530,6 +615,79 @@
     }
     syncSupportUploadBtn();
 
+    const llmSettingsEl = document.getElementById('llm-settings');
+    function syncExtractModeUi() {
+      const llm = document.querySelector('input[name="extract-mode"]:checked').value === 'llm';
+      llmSettingsEl.classList.toggle('visible', llm);
+    }
+    document.querySelectorAll('input[name="extract-mode"]').forEach(r => {
+      r.addEventListener('change', syncExtractModeUi);
+    });
+    syncExtractModeUi();
+
+    const llmModelsHint = document.getElementById('llm-models-hint');
+    const llmModelSuggestions = document.getElementById('llm-model-suggestions');
+
+    function setLlmModelsHint(text, kind) {
+      llmModelsHint.textContent = text || '';
+      llmModelsHint.classList.remove('llm-models-hint--err', 'llm-models-hint--ok');
+      if (kind === 'err') llmModelsHint.classList.add('llm-models-hint--err');
+      else if (kind === 'ok') llmModelsHint.classList.add('llm-models-hint--ok');
+    }
+
+    function fillLlmModelSuggestions(ids) {
+      llmModelSuggestions.innerHTML = '';
+      ids.forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id;
+        llmModelSuggestions.appendChild(opt);
+      });
+    }
+
+    document.getElementById('llm-fetch-models').addEventListener('click', async () => {
+      const btn = document.getElementById('llm-fetch-models');
+      const base = document.getElementById('llm-base-url').value.trim();
+      if (!base) {
+        setLlmModelsHint('Enter a base URL first (e.g. https://api.openai.com/v1).', 'err');
+        return;
+      }
+      btn.disabled = true;
+      setLlmModelsHint('Fetching model list…', '');
+      try {
+        const r = await fetch('/llm-models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            llm_base_url: base,
+            llm_api_key: document.getElementById('llm-api-key').value,
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.error || 'Could not list models');
+        const models = data.models || [];
+        fillLlmModelSuggestions(models);
+        setLlmModelsHint(
+          models.length
+            ? `${models.length} model(s) loaded — pick from suggestions or type a name.`
+            : 'Server returned no models.',
+          models.length ? 'ok' : ''
+        );
+      } catch (e) {
+        setLlmModelsHint(String(e.message || e), 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('llm-ollama-preset').addEventListener('click', () => {
+      document.querySelector('input[name="extract-mode"][value="llm"]').checked = true;
+      syncExtractModeUi();
+      document.getElementById('llm-base-url').value = 'http://127.0.0.1:11434/v1';
+      document.getElementById('llm-api-key').value = 'ollama';
+      document.getElementById('llm-model').value = 'llama3.2';
+      setLlmModelsHint('');
+    });
+
     function clearExtractSummary() {
       extractSummaryEl.innerHTML = '';
       extractSummaryEl.classList.remove('visible');
@@ -544,7 +702,7 @@
         if (fr.ok) {
           const rowPhrase = fr.rows === 1 ? '1 row' : `${fr.rows} rows`;
           const zeroHint = fr.rows === 0 ? ' Ask your developer if this document should yield rows.' : '';
-          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — matched template <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}</div>`;
+          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}</div>`;
         }
         if (fr.reason === 'no_template') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples). You can also use <strong>Save for developer</strong> above to store this file on the server.</div>`;
@@ -555,9 +713,12 @@
         if (fr.reason === 'empty_text') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No extractable text</strong> (often a scanned PDF). OCR is not supported; use a text-based PDF.</div>`;
         }
+        if (fr.reason === 'llm_error') {
+          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>LLM extraction failed.</strong> ${esc(fr.detail || '')}</div>`;
+        }
         return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — ${esc(fr.detail || 'Extraction failed.')}</div>`;
       }).join('');
-      extractSummaryEl.innerHTML = '<h3>Extractor template matching</h3>' + rows;
+      extractSummaryEl.innerHTML = '<h3>Per-file results</h3>' + rows;
       extractSummaryEl.classList.add('visible');
     }
 
@@ -915,6 +1076,13 @@
 
       const form = new FormData();
       selectedFiles.forEach(f => form.append('files', f));
+      const extractMode = document.querySelector('input[name="extract-mode"]:checked').value;
+      form.append('mode', extractMode);
+      if (extractMode === 'llm') {
+        form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
+        form.append('llm_api_key', document.getElementById('llm-api-key').value);
+        form.append('llm_model', document.getElementById('llm-model').value.trim());
+      }
 
       try {
         const resp = await fetch('/extract', { method: 'POST', body: form });
@@ -940,7 +1108,13 @@
         const allNoTemplate = fileResults.length > 0 && fileResults.every(r => !r.ok && r.reason === 'no_template');
 
         if (!anyRows) {
-          if (allNoTemplate) {
+          if (extractMode === 'llm') {
+            if (errors.length) {
+              setStatus('LLM extraction failed or returned nothing usable. See the breakdown below.', 'error');
+            } else {
+              setStatus('LLM returned <strong>zero</strong> test cases. Try another model or check document content.', 'warning');
+            }
+          } else if (allNoTemplate) {
             setStatus('No extractor template matched your file(s). Check the breakdown below and contact your developer for a new template. Use <strong>Save for developer</strong> if you want the file stored for them.', 'error');
           } else if (anyOk) {
             setStatus('A template matched, but <strong>zero</strong> test case rows came back. Try another document or ask your developer to adjust the extractor.', 'warning');

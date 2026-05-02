@@ -29,9 +29,15 @@ The app loads `.env` via `python-dotenv` on startup (optional file).
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `SUPPORT_UPLOAD_DIR` | No | `support_uploads` | **Save for developer** inbox (always on). Relative paths resolve from the folder containing `app.py`; omit `.env` entirely to use the default folder next to `app.py`. |
-| `LLM_API_KEY` | Yes | — | API key (`"ollama"` for local Ollama) |
-| `LLM_BASE_URL` | No | OpenAI | Override endpoint (e.g. `http://localhost:11434/v1`) |
-| `LLM_MODEL` | No | `gpt-4o` | Model name |
+
+## LLM extraction (UI)
+
+On the **Test case extractor** tab you can choose **LLM (OpenAI-compatible)** instead of template extractors.
+
+- **Per request only:** base URL, API key, and model are sent with `POST /extract` as form fields; listing models uses `POST /llm-models` with JSON. They are **not** written to `.env`, disk, or logs (do not enable logging of raw multipart bodies in production).
+- **HTTPS:** if the app is not on `localhost`, use HTTPS so the key is not sent in clear text.
+- **Ollama:** click **Use Ollama defaults** (or set URL `http://127.0.0.1:11434/v1`, API key `ollama`, and your local model name). The Flask server must be able to reach that host (e.g. same machine).
+- Output rows match [`exporter.py`](exporter.py) columns (including **`steps_expected`**). Implementation: [`llm_extractor.py`](llm_extractor.py).
 
 ## Installing dependencies
 
@@ -68,16 +74,19 @@ The document pipeline is linear — upload → normalize to plain text → pick 
 
 4. **`extractors/`** — template modules implement `matches(doc_text)` and `extract(doc_text, filename)`; the first match wins (`extractors/__init__.py`).
 
-5. **`app.py`** — Flask routes include:
+5. **`llm_extractor.py`** — optional OpenAI-compatible `chat/completions` path; strict JSON `test_cases` → normalized row dicts.
+
+6. **`app.py`** — Flask routes include:
    - `GET /` — UI
    - `GET /health` — status, extractor list; **`support_upload_enabled`** is always true (inbox uses `SUPPORT_UPLOAD_DIR` or default `support_uploads`)
    - `POST /preview-doc` — single `.docx` or `.pdf` → parsed text preview
+   - `POST /llm-models` — JSON `{ llm_base_url, llm_api_key? }` → `{ models: [...] }` via OpenAI-compatible `GET …/models` or Ollama `GET …/api/tags` (server-side; credentials not persisted). UI **Fetch models** uses this.
    - `POST /support-upload` — saves one `.docx`/`.pdf` into `SUPPORT_UPLOAD_DIR` (default `./support_uploads`) with a unique filename; returns `{ ok, reference }` (inbox is gitignored)
-   - `POST /extract` — multipart uploads → combined rows + per-file `file_results`
+   - `POST /extract` — multipart uploads → combined rows + per-file `file_results`; form field `mode=template` (default) or `mode=llm` with `llm_base_url`, `llm_api_key`, `llm_model`
    - `POST /download` — `{rows}` JSON → `.xlsx`
    - `GET /samples/<path>` — static sample files
    - Excel shrinker routes under `/excel/…`
 
-6. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`). Default columns include **`steps_expected`** (flattened procedure-table text) instead of separate steps vs expected columns.
+7. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`). Default columns include **`steps_expected`** (flattened procedure-table text) instead of separate steps vs expected columns.
 
 The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step.
