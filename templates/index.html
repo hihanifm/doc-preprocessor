@@ -458,6 +458,7 @@
           <button type="button" class="btn btn--muted btn--sm" id="llm-fetch-models">Fetch models</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-preset" title="Ollama on the same machine as the browser (Flask not in Docker)">Ollama · localhost</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-docker-preset" title="Ollama on the host when Flask runs in Docker (Docker Desktop)">Ollama · Docker host</button>
+          <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-proxy-preset" title="Host gateway proxy (OpenAI-compatible /v1), often port forwarding to Ollama — same host as Docker host">Ollama · proxy :35700</button>
         </div>
         <p id="llm-models-hint" class="hint" aria-live="polite"></p>
       </div>
@@ -736,6 +737,9 @@
     });
     document.getElementById('llm-ollama-docker-preset').addEventListener('click', () => {
       applyOllamaPreset('http://host.docker.internal:11434/v1');
+    });
+    document.getElementById('llm-ollama-proxy-preset').addEventListener('click', () => {
+      applyOllamaPreset('http://host.docker.internal:35700/v1');
     });
 
     function clearExtractSummary() {
