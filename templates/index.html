@@ -220,6 +220,9 @@
     /* Preview table */
     #preview-section { display: none; }
     #preview-section h2 { font-size: 1rem; font-weight: 600; margin-bottom: 10px; }
+    #preview-section .preview-table-hint {
+      font-size: 0.78rem; color: var(--muted); margin: -4px 0 10px;
+    }
     .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid #e2e8f0; }
     table { width: 100%; border-collapse: collapse; font-size: 0.82rem; background: #fff; }
     thead th {
@@ -231,6 +234,23 @@
       padding: 8px 12px; border-bottom: 1px solid #e2e8f0;
       vertical-align: top; max-width: 320px;
       white-space: pre-wrap; word-break: break-word;
+    }
+    #preview-table tbody td.preview-td {
+      cursor: pointer;
+      user-select: text;
+    }
+    #preview-table tbody td.preview-td:focus-visible {
+      outline: 2px solid var(--brand);
+      outline-offset: -2px;
+    }
+    #preview-table tbody td.preview-td.is-collapsed .preview-cell-inner {
+      max-height: calc(1.45em * 5);
+      overflow: hidden;
+    }
+    #preview-table tbody td.preview-td .preview-cell-inner {
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.45;
     }
 
     /* Spinner */
@@ -365,6 +385,7 @@
 
     <div id="preview-section">
       <h2 id="preview-title"></h2>
+      <p class="preview-table-hint">Tabular preview: each cell shows up to 5 lines — click a cell to expand or collapse.</p>
       <div class="table-wrap">
         <table id="preview-table">
           <thead>
@@ -956,9 +977,27 @@
         : '';
       previewTitle.textContent = `Preview — ${total} row(s)${extra}`;
       previewBody.innerHTML = slice.map(row =>
-        `<tr>${COL_KEYS.map(k => `<td>${esc((row[k] || '').toString())}</td>`).join('')}</tr>`
+        `<tr>${COL_KEYS.map(k => {
+          const raw = (row[k] || '').toString();
+          return `<td class="preview-td is-collapsed" role="button" tabindex="0" aria-expanded="false" aria-label="Cell content, click to expand"><div class="preview-cell-inner">${esc(raw)}</div></td>`;
+        }).join('')}</tr>`
       ).join('');
     }
+
+    previewBody.addEventListener('click', e => {
+      const td = e.target.closest('td.preview-td');
+      if (!td || !previewBody.contains(td)) return;
+      td.classList.toggle('is-collapsed');
+      td.setAttribute('aria-expanded', String(!td.classList.contains('is-collapsed')));
+    });
+    previewBody.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const td = e.target.closest('td.preview-td');
+      if (!td || !previewBody.contains(td)) return;
+      e.preventDefault();
+      td.classList.toggle('is-collapsed');
+      td.setAttribute('aria-expanded', String(!td.classList.contains('is-collapsed')));
+    });
 
     // ── Download ─────────────────────────────────────────────────────────────
     downloadBtn.addEventListener('click', async () => {
