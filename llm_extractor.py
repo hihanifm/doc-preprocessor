@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -108,6 +109,84 @@ def _chat_url(base_url: str) -> str:
     return base_url.rstrip("/") + "/chat/completions"
 
 
+def _assistant_content_from_completion(data: dict[str, Any]) -> str:
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    msg = choices[0].get("message") or {}
+    return (msg.get("content") or "").strip() if isinstance(msg, dict) else ""
+
+
+def _post_stream_collect(url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float) -> str:
+    """
+    POST chat/completions with stream=true; read OpenAI-style SSE (data: {...}) or a plain JSON body
+    if the server ignores stream and returns one shot.
+    """
+    stream_payload = {**payload, "stream": True}
+    body = json.dumps(stream_payload, ensure_ascii=False).encode("utf-8")
+    hdrs = {**headers, "Accept": "text/event-stream"}
+    req = Request(url, data=body, headers=hdrs, method="POST")
+    parts: list[str] = []
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            charset = resp.headers.get_content_charset() or "utf-8"
+
+            # Some endpoints ignore stream:true and return application/json in one chunk.
+            if "application/json" in ct and "event-stream" not in ct and "text/event-stream" not in ct:
+                raw = resp.read().decode(charset, errors="replace")
+                data = json.loads(raw)
+                return _assistant_content_from_completion(data)
+
+            while True:
+                raw = resp.readline()
+                if not raw:
+                    break
+                line = raw.decode(charset, errors="replace").rstrip("\r\n")
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk: dict[str, Any] = json.loads(data_str)
+                except json.JSONDecodeError:
+                    log.debug("LLM SSE skipped non-JSON line: %r", data_str[:160])
+                    continue
+                for choice in chunk.get("choices") or []:
+                    if not isinstance(choice, dict):
+                        continue
+                    delta = choice.get("delta") or {}
+                    if isinstance(delta, dict):
+                        c = delta.get("content")
+                        if isinstance(c, str) and c:
+                            parts.append(c)
+                    msg = choice.get("message")
+                    if isinstance(msg, dict):
+                        c2 = msg.get("content")
+                        if isinstance(c2, str) and c2:
+                            parts.append(c2)
+        return "".join(parts)
+    except HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            err_body = ""
+        log.warning(
+            "LLM stream POST %s failed HTTP %s (snippet: %r)",
+            url,
+            e.code,
+            (err_body[:300] + "…") if len(err_body) > 300 else err_body,
+        )
+        hint = f" {err_body}" if err_body else ""
+        raise LlmExtractError(f"LLM HTTP error {e.code}.{hint}".strip()) from None
+    except URLError as e:
+        log.warning("LLM stream POST %s unreachable: %s", url, e.reason)
+        raise LlmExtractError(f"Could not reach LLM server: {e.reason!s}") from None
+
+
 def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeout: float) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = Request(url, data=body, headers=headers, method="POST")
@@ -135,6 +214,11 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeo
         raise LlmExtractError(f"Invalid JSON from LLM server: {e}") from None
 
 
+def _default_stream_enabled() -> bool:
+    v = (os.environ.get("LLM_STREAM") or "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
 def extract_with_llm(
     doc_text: str,
     *,
@@ -143,11 +227,13 @@ def extract_with_llm(
     model: str,
     file_name: str,
     timeout: float = REQUEST_TIMEOUT_SEC,
+    stream: bool | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     Call an OpenAI-compatible POST /v1/chat/completions and normalize rows.
     api_key: use literal \"ollama\" for local Ollama.
 
+    Streaming (SSE) is used by default; set env LLM_STREAM=0 to force one-shot JSON only.
     Returns (rows, doc_meta) where doc_meta describes input truncation (truncated, doc_char_count, max_doc_chars).
     """
     url = _chat_url(base_url)
@@ -176,22 +262,46 @@ def extract_with_llm(
         "temperature": 0.2,
     }
 
+    use_stream = _default_stream_enabled() if stream is None else stream
+
     # Prefer JSON mode when supported (OpenAI); Ollama often rejects — retry without on HTTP 400.
     payload_json = {**payload, "response_format": {"type": "json_object"}}
-    try:
-        data = _post_json(url, headers, payload_json, timeout)
-    except LlmExtractError as first:
-        if "HTTP error 400" not in str(first):
-            raise
-        data = _post_json(url, headers, payload, timeout)
 
-    try:
+    content = ""
+
+    if use_stream:
+        log.debug("LLM extract using streaming (SSE)")
+        try:
+            content = _post_stream_collect(url, headers, payload_json, timeout)
+        except LlmExtractError as first:
+            if "HTTP error 400" not in str(first):
+                raise
+            log.info("LLM stream with json_object rejected HTTP 400; retry stream without response_format")
+            content = _post_stream_collect(url, headers, payload, timeout)
+
+        if not content.strip():
+            log.warning("LLM streaming returned empty assistant text; falling back to non-streaming completion")
+
+    if not content.strip():
+        try:
+            data = _post_json(url, headers, payload_json, timeout)
+        except LlmExtractError as first:
+            if "HTTP error 400" not in str(first):
+                raise
+            data = _post_json(url, headers, payload, timeout)
         choices = data.get("choices") or []
         if not choices:
             raise LlmExtractError("LLM returned no choices.")
-        content = choices[0].get("message", {}).get("content") or ""
-        if not content.strip():
-            raise LlmExtractError("LLM returned empty content.")
+        try:
+            msg0 = choices[0].get("message")
+            content = (msg0.get("content") or "") if isinstance(msg0, dict) else ""
+        except (TypeError, KeyError, IndexError) as e:
+            raise LlmExtractError(f"Unexpected LLM response shape: {e}") from None
+
+    if not content.strip():
+        raise LlmExtractError("LLM returned empty content.")
+
+    try:
         parsed = json.loads(_strip_json_fence(content))
     except json.JSONDecodeError as e:
         raise LlmExtractError(f"Model output was not valid JSON: {e}") from None
