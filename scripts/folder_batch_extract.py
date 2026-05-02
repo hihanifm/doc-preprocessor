@@ -55,18 +55,22 @@ def encode_multipart(
 
     for key, value in fields.items():
         parts.append(f"--{boundary}".encode())
+        parts.append(crlf)
         parts.append(f'Content-Disposition: form-data; name="{key}"'.encode())
+        parts.append(crlf)
         parts.append(crlf)
         parts.append(value.encode("utf-8"))
         parts.append(crlf)
 
     parts.append(f"--{boundary}".encode())
+    parts.append(crlf)
     disp = (
         f'Content-Disposition: form-data; name="{file_field_name}"; filename="{filename}"'
     )
     parts.append(disp.encode())
     parts.append(crlf)
     parts.append(f"Content-Type: {content_type}".encode())
+    parts.append(crlf)
     parts.append(crlf)
     parts.append(file_bytes)
     parts.append(crlf)
