@@ -352,6 +352,30 @@ def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
     return _default_stream_enabled()
 
 
+_MAX_LLM_CALLS_CEILING = 100_000
+
+
+def _env_default_max_llm_calls() -> int:
+    """LLM_MAX_CALLS env; default 3. Non-positive values mean effectively unlimited."""
+    raw = (os.environ.get("LLM_MAX_CALLS") or "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 3
+    if n <= 0:
+        return _MAX_LLM_CALLS_CEILING
+    return min(max(1, n), _MAX_LLM_CALLS_CEILING)
+
+
+def _resolve_max_llm_calls(explicit: int | None) -> int:
+    """Per-file cap on chat completions in section mode. explicit None → env default."""
+    if explicit is not None:
+        if explicit <= 0:
+            return _MAX_LLM_CALLS_CEILING
+        return min(explicit, _MAX_LLM_CALLS_CEILING)
+    return _env_default_max_llm_calls()
+
+
 def detect_shallowest_heading_level(text: str) -> int | None:
     """Smallest heading depth present (# vs ##). None if no markdown headings."""
     levels: list[int] = []
@@ -614,6 +638,7 @@ def extract_with_llm_by_sections(
     section_regex_hints: str = "",
     user_hints: str = "",
     progress: Callable[[dict[str, Any]], None] | None = None,
+    max_llm_calls: int = 3,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Split doc_text on headings or regex line patterns; merge rows from one LLM call per section."""
     use_stream = _resolve_stream("sections", stream)
@@ -676,6 +701,13 @@ def extract_with_llm_by_sections(
         }
 
     work_items = [(t, b) for t, b in parts if b.strip()]
+    if len(work_items) > max_llm_calls:
+        raise LlmExtractError(
+            f"This document splits into {len(work_items)} section(s), each needing one LLM request, "
+            f"but the maximum allowed is {max_llm_calls}. Try whole-file mode, a coarser heading level "
+            f"or regex, or raise Max LLM requests / LLM_MAX_CALLS (admin)."
+        )
+
     if progress:
         progress(
             {
@@ -748,6 +780,7 @@ def extract_with_llm(
     section_regex_hints: str = "",
     user_hints: str = "",
     progress: Callable[[dict[str, Any]], None] | None = None,
+    max_llm_calls: int | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     Call OpenAI-compatible chat/completions. Set document_scope=\"sections\" to split on markdown headings
@@ -758,6 +791,8 @@ def extract_with_llm(
 
     Boilerplate sections (TOC, introduction, revision history, etc.) are dropped when they appear
     as markdown heading lines — see llm_document_filter.prepare_text_for_llm.
+
+    max_llm_calls: cap on section-mode requests per file (default from LLM_MAX_CALLS env, usually 3).
     """
     doc_text, prep_meta = prepare_text_for_llm(doc_text)
     if prep_meta.get("llm_prep_stripped"):
@@ -770,6 +805,9 @@ def extract_with_llm(
     uh = (user_hints or "").strip()
     ds = (document_scope or "whole").strip().lower()
     use_stream = _resolve_stream(document_scope, stream)
+    cap = _resolve_max_llm_calls(max_llm_calls)
+    prep_meta["llm_max_calls_allowed"] = cap
+
     if ds == "sections":
         rows, meta = extract_with_llm_by_sections(
             doc_text,
@@ -784,6 +822,7 @@ def extract_with_llm(
             section_regex_hints=section_regex_hints,
             user_hints=uh,
             progress=progress,
+            max_llm_calls=cap,
         )
         meta.update(prep_meta)
         return rows, meta
