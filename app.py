@@ -39,6 +39,15 @@ class _ExtractRequestLogAdapter(logging.LoggerAdapter):
         return "req_id=%s %s" % (self.extra.get("req_id", "-"), msg), kwargs
 
 
+def _client_request_id() -> str | None:
+    """Optional id from the client (batch script, curl) for log ↔ client correlation."""
+    for key in ("X-Request-ID", "X-Request-Id", "X-Correlation-Id"):
+        v = (request.headers.get(key) or "").strip()
+        if v and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", v):
+            return v[:64]
+    return None
+
+
 def _client_ip() -> str:
     xff = (request.headers.get("X-Forwarded-For") or "").strip()
     if xff:
@@ -49,7 +58,9 @@ def _client_ip() -> str:
 def _extract_reject(msg: str, *, req_id: str = "-"):
     """Log and return 400 JSON for /extract client / validation errors."""
     logger.warning("POST /extract 400 ip=%s req_id=%s detail=%s", _client_ip(), req_id, msg)
-    return jsonify({"error": msg}), 400
+    r = jsonify({"error": msg})
+    r.headers["X-Request-ID"] = req_id
+    return r, 400
 
 
 from excel_filter import (
@@ -458,7 +469,8 @@ def support_upload():
 
 @app.route("/extract", methods=["POST"])
 def extract():
-    req_id = uuid.uuid4().hex[:12]
+    _hdr_id = _client_request_id()
+    req_id = _hdr_id or uuid.uuid4().hex[:12]
     log = _ExtractRequestLogAdapter(logger, {"req_id": req_id})
     _cl = request.content_length
     _ct = (request.content_type or "")[:200]
@@ -488,7 +500,9 @@ def extract():
             [getattr(x, "filename", None) for x in request.files.getlist("files")],
             getattr(fl_single, "filename", None) if fl_single else None,
         )
-        return jsonify({"error": "No files uploaded"}), 400
+        r = jsonify({"error": "No files uploaded"})
+        r.headers["X-Request-ID"] = req_id
+        return r, 400
 
     mode = (request.form.get("mode") or "template").strip().lower()
     upload_names = [(f.filename or "")[:200] for f in files]
@@ -637,7 +651,11 @@ def extract():
         return Response(
             stream_with_context(generate()),
             mimetype="application/x-ndjson",
-            headers={"Cache-Control": "no-store", "X-Extract-Stream": "1"},
+            headers={
+                "Cache-Control": "no-store",
+                "X-Extract-Stream": "1",
+                "X-Request-ID": req_id,
+            },
         )
 
     out = _extract_core(
@@ -662,24 +680,42 @@ def extract():
         len(out.get("errors") or []),
         len(out.get("file_results") or []),
     )
-    return jsonify(out)
+    r = jsonify(out)
+    r.headers["X-Request-ID"] = req_id
+    return r
 
 
 @app.route("/download", methods=["POST"])
 def download():
+    dl_rid = _client_request_id()
     data = request.get_json()
     if not data or "rows" not in data:
-        logger.warning("POST /download 400 ip=%s missing_json_or_rows", _client_ip())
-        return jsonify({"error": "No data provided"}), 400
+        logger.warning(
+            "POST /download 400 ip=%s missing_json_or_rows request_id=%s",
+            _client_ip(),
+            dl_rid or "-",
+        )
+        r = jsonify({"error": "No data provided"})
+        if dl_rid:
+            r.headers["X-Request-ID"] = dl_rid
+        return r, 400
 
     rows = data["rows"]
     nrows = len(rows) if isinstance(rows, list) else -1
-    logger.info("POST /download ip=%s rows=%s", _client_ip(), nrows)
+    logger.info(
+        "POST /download ip=%s rows=%s request_id=%s",
+        _client_ip(),
+        nrows,
+        dl_rid or "-",
+    )
     xlsx_bytes = to_excel(rows)
+    hdrs: dict[str, str] = {"Content-Disposition": "attachment; filename=test_cases.xlsx"}
+    if dl_rid:
+        hdrs["X-Request-ID"] = dl_rid
     return Response(
         xlsx_bytes,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=test_cases.xlsx"},
+        headers=hdrs,
     )
 
 

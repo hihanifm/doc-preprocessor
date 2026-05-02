@@ -30,6 +30,14 @@ T = TypeVar("T")
 
 # One id per `main()` run — prefix every line so background/no-GTTY logs stay grep-friendly.
 _BULK_PREFIX = "[bulk]"
+# Same value sent as HTTP X-Request-ID so server lines use req_id=… matching this run.
+_HTTP_SESSION_ID = ""
+
+
+def _extra_http_headers() -> dict[str, str]:
+    if not _HTTP_SESSION_ID:
+        return {}
+    return {"X-Request-ID": _HTTP_SESSION_ID}
 
 
 def _bulk_line(msg: str, *, file=sys.stderr, flush: bool = False) -> None:
@@ -201,7 +209,12 @@ def post_ndjson_extract(base_url: str, path: Path, form: dict[str, str], timeout
         file_bytes,
         _guess_mime(path),
     )
-    req = Request(url, data=body, method="POST", headers={"Content-Type": ctype})
+    req = Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": ctype, **_extra_http_headers()},
+    )
     try:
         with urlopen(req, timeout=timeout) as resp:
             if resp.headers.get("X-Extract-Stream") != "1":
@@ -230,7 +243,12 @@ def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: 
         file_bytes,
         _guess_mime(path),
     )
-    req = Request(url, data=body, method="POST", headers={"Content-Type": ctype})
+    req = Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"Content-Type": ctype, **_extra_http_headers()},
+    )
     try:
         with urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
@@ -253,7 +271,7 @@ def post_download(base_url: str, rows: list[dict[str, Any]], timeout: float) -> 
         url,
         data=body,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_extra_http_headers()},
     )
     try:
         with urlopen(req, timeout=timeout) as resp:
@@ -414,6 +432,12 @@ def _log_startup(
 ) -> None:
     extract_u, download_u = _api_urls(args.base_url)
     _bulk_line("══ folder_batch_extract ══")
+    _bulk_line(
+        f"session X-Request-ID={_HTTP_SESSION_ID} "
+        "(server logs use req_id=… same value when LOG_LEVEL includes INFO)",
+        file=sys.stdout,
+        flush=True,
+    )
     _bulk_line(f"source:      {source}")
     _bulk_line(f"output:      {output_dir}")
     _bulk_line(f"files:       {file_count} document(s)")
@@ -557,8 +581,10 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    global _BULK_PREFIX
-    _BULK_PREFIX = f"[bulk run={uuid.uuid4().hex[:10]}]"
+    global _BULK_PREFIX, _HTTP_SESSION_ID
+    _sid = uuid.uuid4().hex[:12]
+    _HTTP_SESSION_ID = _sid
+    _BULK_PREFIX = f"[bulk run={_sid}]"
 
     hints_raw = args.llm_section_regex_hints.strip()
     if hints_raw:
