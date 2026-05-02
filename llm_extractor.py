@@ -340,7 +340,7 @@ def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
     """
     if stream is not None:
         return stream
-    ds = (document_scope or "whole").strip().lower()
+    ds = (document_scope or "sections").strip().lower()
     if ds == "sections":
         return _default_stream_sections_enabled()
     return _default_stream_enabled()
@@ -817,7 +817,7 @@ def extract_with_llm(
     file_name: str,
     timeout: float = REQUEST_TIMEOUT_SEC,
     stream: bool | None = None,
-    document_scope: str = "whole",
+    document_scope: str = "sections",
     heading_level: str = "auto",
     section_split: str = "headings",
     section_regex_hints: str = "",
@@ -845,7 +845,7 @@ def extract_with_llm(
         )
 
     uh = (user_hints or "").strip()
-    ds = (document_scope or "whole").strip().lower()
+    ds = (document_scope or "sections").strip().lower()
     use_stream = _resolve_stream(document_scope, stream)
     prep_meta["llm_rpm"] = _env_llm_rpm()
 

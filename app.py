@@ -437,7 +437,7 @@ def extract():
     llm_base_url = ""
     llm_api_key = ""
     llm_model = ""
-    llm_document_scope = "whole"
+    llm_document_scope = "sections"
     llm_heading_level = "auto"
     llm_section_split = "headings"
     llm_section_regex_hints = ""
@@ -450,7 +450,7 @@ def extract():
         form_err = validate_llm_form(llm_base_url, llm_api_key, llm_model)
         if form_err:
             return jsonify({"error": form_err}), 400
-        llm_document_scope = (request.form.get("llm_document_scope") or "whole").strip().lower()
+        llm_document_scope = (request.form.get("llm_document_scope") or "sections").strip().lower()
         if llm_document_scope not in ("whole", "sections"):
             return jsonify({"error": "llm_document_scope must be whole or sections."}), 400
         llm_heading_level = (request.form.get("llm_heading_level") or "auto").strip().lower()
