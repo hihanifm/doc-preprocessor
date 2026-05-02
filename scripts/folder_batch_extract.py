@@ -2,7 +2,7 @@
 """
 Batch extraction via Docs Garage HTTP API: one .docx/.pdf per request → one .xlsx per file.
 
-Run on the same host as Flask (e.g. SSH to lab, BASE_URL=http://127.0.0.1:5000).
+Run on the same host as Flask (e.g. SSH to lab, BASE_URL=http://127.0.0.1:35050).
 
 LLM mode defaults to NDJSON progress from /extract (section-by-section lines on stderr, like the UI).
 Use --no-llm-progress-stream for one-shot JSON only.
@@ -448,8 +448,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--base-url",
-        default=env.get("base_url", "http://127.0.0.1:5000"),
-        help="Docs Garage base URL (env: DOCS_GARAGE_URL). Default http://127.0.0.1:5000",
+        default=env.get("base_url", "http://127.0.0.1:35050"),
+        help="Docs Garage base URL (env: DOCS_GARAGE_URL). Default http://127.0.0.1:35050",
     )
     parser.add_argument(
         "--mode",

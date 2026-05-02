@@ -1,6 +1,6 @@
 # Bulk folder extraction (no UI)
 
-Run on the **same machine as Docs Garage** (e.g. SSH into the lab), with Flask already listening on `--base-url` (default `http://127.0.0.1:5000`). Traffic stays on loopback; no browser required.
+Run on the **same machine as Docs Garage** (e.g. SSH into the lab), with Flask already listening on `--base-url` (default `http://127.0.0.1:35050`). Traffic stays on loopback; no browser required.
 
 ## Usage
 
@@ -9,7 +9,7 @@ source .venv/bin/activate
 python scripts/folder_batch_extract.py \
   --source /path/to/indir \
   --output /path/to/outdir \
-  --base-url http://127.0.0.1:5000 \
+  --base-url http://127.0.0.1:35050 \
   --mode template
 ```
 
