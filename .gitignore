@@ -6,6 +6,8 @@ __pycache__/
 
 # App runtime
 .env
+nohup-app.log
+.app-nohup.pid
 data/
 llm_io.log
 config.json
