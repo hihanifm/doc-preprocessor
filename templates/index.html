@@ -435,7 +435,19 @@
     }
     #llm-settings .hint { margin: 0 0 8px; font-size: 0.78rem; }
     #llm-heading-level-wrap.is-hidden { display: none !important; }
+    #llm-regex-row.is-hidden { display: none !important; }
+    #llm-scope-extra.is-hidden { display: none !important; }
     #llm-scope-row { margin-top: 4px; }
+    #llm-user-hints, #llm-section-regex-hints {
+      min-width: min(100%, 420px);
+      max-width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+      font-family: inherit;
+      resize: vertical;
+    }
     #llm-models-hint {
       margin: 0 0 8px;
       font-size: 0.78rem;
@@ -494,24 +506,45 @@
         </div>
         <div class="llm-field-row" id="llm-scope-row">
           <label>LLM document
-            <select id="llm-document-scope" aria-label="Send whole file or split by headings">
+            <select id="llm-document-scope" aria-label="Send whole file or split into sections">
               <option value="whole" selected>Whole file (one model request)</option>
-              <option value="sections">By section (one request per heading block)</option>
-            </select>
-          </label>
-          <label id="llm-heading-level-wrap">Split at
-            <select id="llm-heading-level" aria-label="Which heading level starts a new section">
-              <option value="auto" selected>Auto — shallowest # in file</option>
-              <option value="1">Heading 1 only (# )</option>
-              <option value="2">Heading 2 (## )</option>
-              <option value="3">Heading 3 (### )</option>
-              <option value="4">Heading 4</option>
-              <option value="5">Heading 5</option>
-              <option value="6">Heading 6</option>
+              <option value="sections">By section (multiple model requests)</option>
             </select>
           </label>
         </div>
-        <p class="hint" id="llm-section-hint">By section: Word <em>Heading 1/2/…</em> styles become lines like <code># Title</code>. Splits the file at that depth and calls the model once per chunk (slower, fits context better). Most PDFs have no <code>#</code> lines — use whole file.</p>
+        <div id="llm-scope-extra" class="is-hidden">
+          <div class="llm-field-row">
+            <label>Split using
+              <select id="llm-section-split" aria-label="How to detect section boundaries">
+                <option value="headings" selected>Markdown headings (# …)</option>
+                <option value="patterns">Regex — start a section when a line matches</option>
+              </select>
+            </label>
+            <label id="llm-heading-level-wrap">Split at
+              <select id="llm-heading-level" aria-label="Which heading level starts a new section">
+                <option value="auto" selected>Auto — shallowest # in file</option>
+                <option value="1">Heading 1 only (# )</option>
+                <option value="2">Heading 2 (## )</option>
+                <option value="3">Heading 3 (### )</option>
+                <option value="4">Heading 4</option>
+                <option value="5">Heading 5</option>
+                <option value="6">Heading 6</option>
+              </select>
+            </label>
+          </div>
+          <div id="llm-regex-row" class="is-hidden">
+            <label>Section-start regexes (one per line)
+              <textarea id="llm-section-regex-hints" rows="4" maxlength="12000" autocomplete="off" placeholder="Example — ids like proj_tc_a_b_c on their own line:&#10;^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+&#10;^TC_"></textarea>
+            </label>
+            <p class="hint" style="margin-top:6px;">Lines starting with <code>#</code> in this box are treated as comments and skipped. Uses Python <code>re</code> syntax.</p>
+          </div>
+        </div>
+        <div class="llm-field-row">
+          <label>Optional hints for test IDs / section titles (sent to the model)
+            <textarea id="llm-user-hints" rows="3" maxlength="8000" autocomplete="off" placeholder="Example: primary test ids look like MODULE_x_y_z and appear in section titles."></textarea>
+          </label>
+        </div>
+        <p class="hint" id="llm-section-hint"><strong>By section:</strong> either split at Word <em>Heading</em> styles (<code>#</code> lines) or at regex matches — useful when titles carry ids like <code>x_y_z</code>. Hints help the model map those ids to <code>test_id</code>. PDFs often lack <code>#</code> lines — try regex or whole file.</p>
         <p id="llm-models-hint" class="hint" aria-live="polite"></p>
       </div>
     </div>
@@ -686,25 +719,39 @@
     syncSupportUploadBtn();
 
     const llmSettingsEl = document.getElementById('llm-settings');
-    function syncLlmHeadingLevelVisibility() {
-      const wrap = document.getElementById('llm-heading-level-wrap');
+    function syncLlmSectionPanels() {
       const scope = document.getElementById('llm-document-scope');
-      if (!wrap || !scope) return;
-      const show = scope.value === 'sections';
-      wrap.classList.toggle('is-hidden', !show);
-      wrap.setAttribute('aria-hidden', show ? 'false' : 'true');
+      const extra = document.getElementById('llm-scope-extra');
+      const split = document.getElementById('llm-section-split');
+      const hw = document.getElementById('llm-heading-level-wrap');
+      const rx = document.getElementById('llm-regex-row');
+      if (!scope || !extra) return;
+      const sec = scope.value === 'sections';
+      extra.classList.toggle('is-hidden', !sec);
+      if (!sec) return;
+      const patterns = split && split.value === 'patterns';
+      if (hw) {
+        hw.classList.toggle('is-hidden', !!patterns);
+        hw.setAttribute('aria-hidden', patterns ? 'true' : 'false');
+      }
+      if (rx) {
+        rx.classList.toggle('is-hidden', !patterns);
+        rx.setAttribute('aria-hidden', patterns ? 'false' : 'true');
+      }
     }
     function syncExtractModeUi() {
       const llm = document.querySelector('input[name="extract-mode"]:checked').value === 'llm';
       llmSettingsEl.classList.toggle('visible', llm);
-      if (llm) syncLlmHeadingLevelVisibility();
+      if (llm) syncLlmSectionPanels();
     }
     document.querySelectorAll('input[name="extract-mode"]').forEach(r => {
       r.addEventListener('change', syncExtractModeUi);
     });
     syncExtractModeUi();
     const llmDocScopeEl = document.getElementById('llm-document-scope');
-    if (llmDocScopeEl) llmDocScopeEl.addEventListener('change', syncLlmHeadingLevelVisibility);
+    if (llmDocScopeEl) llmDocScopeEl.addEventListener('change', syncLlmSectionPanels);
+    const llmSectionSplitEl = document.getElementById('llm-section-split');
+    if (llmSectionSplitEl) llmSectionSplitEl.addEventListener('change', syncLlmSectionPanels);
 
     const llmModelsHint = document.getElementById('llm-models-hint');
 
@@ -828,8 +875,13 @@
           }
           let secHint = '';
           if (fr.llm_section_mode && fr.llm_section_calls != null) {
-            const lv = fr.llm_heading_level_used != null ? ` at heading depth ${esc(String(fr.llm_heading_level_used))}` : '';
-            secHint = `<span class="extract-summary-row--trunc" style="color:#0369a1;">Section mode${lv}: ${esc(String(fr.llm_section_calls))} model request(s).</span>`;
+            const via =
+              fr.llm_section_split === 'patterns'
+                ? `regex (${esc(String(fr.llm_pattern_count != null ? fr.llm_pattern_count : '?'))} pattern(s))`
+                : fr.llm_heading_level_used != null
+                  ? `headings at depth ${esc(String(fr.llm_heading_level_used))}`
+                  : 'sections';
+            secHint = `<span class="extract-summary-row--trunc" style="color:#0369a1;">Section mode (${via}): ${esc(String(fr.llm_section_calls))} model request(s).</span>`;
           }
           return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${secHint}${truncHint}</div>`;
         }
@@ -1129,7 +1181,7 @@
       return `${m}m ${rs.toString().padStart(2, '0')}s`;
     }
 
-    function buildExtractLoadingHtml(extractMode, fileCount, elapsedMs, llmSectionsMode) {
+    function buildExtractLoadingHtml(extractMode, fileCount, elapsedMs, llmSectionsMode, llmRegexSections) {
       const nf = fileCount === 1 ? '1 file' : `${fileCount} files`;
       const elapsed = formatExtractElapsed(elapsedMs);
       let phase = '';
@@ -1138,11 +1190,14 @@
         if (elapsedMs < 1500) phase = 'Uploading files…';
         else if (elapsedMs < 3500) phase = 'Reading documents on the server…';
         else if (llmSectionsMode) {
-          if (elapsedMs < 12000) phase = 'Extracting section by section (multiple model calls)…';
-          else if (elapsedMs < 60000) phase = 'Still running section requests…';
+          if (elapsedMs < 12000) {
+            phase = llmRegexSections
+              ? 'Matching regex section boundaries and calling the model per chunk…'
+              : 'Extracting section by section (multiple model calls)…';
+          } else if (elapsedMs < 60000) phase = 'Still running section requests…';
           else {
             phase = 'Still extracting sections…';
-            hint = 'Each heading block is a separate request; large specs can take several minutes.';
+            hint = 'Each section is a separate request; large specs can take several minutes.';
           }
         } else if (elapsedMs < 12000) phase = 'Calling the language model…';
         else if (elapsedMs < 60000) phase = 'Waiting for the model response…';
@@ -1171,12 +1226,21 @@
       );
     }
 
-    function startExtractProgress(extractMode, fileCount, llmSectionsMode) {
+    function startExtractProgress(extractMode, fileCount, llmSectionsMode, llmRegexSections) {
       stopExtractProgress();
       const start = Date.now();
       const tick = () => {
         const elapsedMs = Date.now() - start;
-        setStatus(buildExtractLoadingHtml(extractMode, fileCount, elapsedMs, !!llmSectionsMode), 'loading');
+        setStatus(
+          buildExtractLoadingHtml(
+            extractMode,
+            fileCount,
+            elapsedMs,
+            !!llmSectionsMode,
+            !!llmRegexSections
+          ),
+          'loading'
+        );
       };
       tick();
       extractProgressTimer = setInterval(tick, 450);
@@ -1278,8 +1342,12 @@
       const form = new FormData();
       selectedFiles.forEach(f => form.append('files', f));
       const extractMode = document.querySelector('input[name="extract-mode"]:checked').value;
-      const llmSectionScope = extractMode === 'llm' && document.getElementById('llm-document-scope').value === 'sections';
-      startExtractProgress(extractMode, selectedFiles.length, llmSectionScope);
+      const llmSectionScope =
+        extractMode === 'llm' &&
+        document.getElementById('llm-document-scope').value === 'sections';
+      const llmRegexSections =
+        llmSectionScope && document.getElementById('llm-section-split').value === 'patterns';
+      startExtractProgress(extractMode, selectedFiles.length, llmSectionScope, llmRegexSections);
       form.append('mode', extractMode);
       if (extractMode === 'llm') {
         form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
@@ -1287,6 +1355,9 @@
         form.append('llm_model', document.getElementById('llm-model').value.trim());
         form.append('llm_document_scope', document.getElementById('llm-document-scope').value);
         form.append('llm_heading_level', document.getElementById('llm-heading-level').value);
+        form.append('llm_section_split', document.getElementById('llm-section-split').value);
+        form.append('llm_section_regex_hints', document.getElementById('llm-section-regex-hints').value);
+        form.append('llm_user_hints', document.getElementById('llm-user-hints').value.trim());
       }
 
       try {

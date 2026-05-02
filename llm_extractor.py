@@ -43,6 +43,7 @@ Exact shape:
 Rules:
 - test_cases is an array; use [] if nothing qualifies.
 - All values are strings (use "" if unknown).
+- If the user message includes "User hints about identifiers", use them to recognize test ids (e.g. tokens like x_y_z) in titles and text.
 - If the user message includes "Section: …", only extract test cases from that section's body (it is part of a larger document sent in multiple requests).
 - steps_expected: put procedure steps, actions, AND expected results / outcomes together in one field (plain text or multi-line). Do not split into separate columns.
 - Map headings, numbered sections, and tables into logical test cases when possible.
@@ -341,6 +342,59 @@ def detect_shallowest_heading_level(text: str) -> int | None:
     return min(levels) if levels else None
 
 
+def _compile_section_regex_hints(raw: str) -> list[re.Pattern[str]]:
+    """One regex per non-empty line; lines starting with # are ignored (comments)."""
+    out: list[re.Pattern[str]] = []
+    for line in raw.split("\n"):
+        pat = line.strip()
+        if not pat or pat.startswith("#"):
+            continue
+        try:
+            out.append(re.compile(pat))
+        except re.error as e:
+            raise LlmExtractError(f"Invalid section regex {pat!r}: {e}") from None
+    return out
+
+
+def split_document_by_regex_hints(text: str, patterns: list[re.Pattern[str]]) -> list[tuple[str, str]]:
+    """
+    Start a new section on any line where at least one pattern matches (search on stripped line).
+    Section title is the full matching line (truncated). Text before first match is \"(preamble)\".
+    """
+    lines = text.split("\n")
+    sections: list[tuple[str, str]] = []
+    buf: list[str] = []
+    current_title = ""
+
+    def flush(title: str, body_lines: list[str]) -> None:
+        body = "\n".join(body_lines).strip()
+        display = title if title else "(preamble)"
+        if not body and not title:
+            return
+        if not body and display == "(preamble)":
+            return
+        sections.append((display, body))
+
+    def line_opens_section(line: str) -> bool:
+        s = line.strip()
+        if not s:
+            return False
+        for pat in patterns:
+            if pat.search(s):
+                return True
+        return False
+
+    for line in lines:
+        if line_opens_section(line):
+            flush(current_title, buf)
+            current_title = line.strip()[:800]
+            buf = []
+        else:
+            buf.append(line)
+    flush(current_title, buf)
+    return sections
+
+
 def split_document_by_headings(text: str, target_level: int) -> list[tuple[str, str]]:
     """
     Split on lines that are exactly `target_level` many '#' (Word Heading N → N hashes).
@@ -396,6 +450,7 @@ def _extract_with_llm_single_pass(
     timeout: float = REQUEST_TIMEOUT_SEC,
     stream: bool | None = None,
     section_title: str | None = None,
+    user_hints: str | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     One chat/completions call for a single document chunk (whole file or one section).
@@ -407,7 +462,11 @@ def _extract_with_llm_single_pass(
 
     text, doc_meta = _truncate(doc_text)
     sec_line = f"Section: {section_title}\n\n" if section_title else ""
-    user_content = f"Filename: {file_name}\n{sec_line}--- Document text ---\n\n{text}"
+    uh = (user_hints or "").strip()
+    hint_line = (
+        f"User hints about identifiers / section titles (from human): {uh}\n\n" if uh else ""
+    )
+    user_content = f"Filename: {file_name}\n{sec_line}{hint_line}--- Document text ---\n\n{text}"
 
     log.info(
         "LLM extract request chat=%s model=%r file=%r section=%r truncated=%s doc_chars=%s",
@@ -512,19 +571,73 @@ def extract_with_llm_by_sections(
     timeout: float = REQUEST_TIMEOUT_SEC,
     stream: bool | None = None,
     heading_level: str = "auto",
+    section_split: str = "headings",
+    section_regex_hints: str = "",
+    user_hints: str = "",
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """Split doc_text on markdown # headings, then merge rows from one LLM call per section."""
-    target = _resolve_heading_split_level(doc_text, heading_level)
-    parts = split_document_by_headings(doc_text, target)
-    log.info(
-        "LLM section mode: heading depth=%d → %d chunk(s) for %r",
-        target,
-        len(parts),
-        file_name,
-    )
+    """Split doc_text on headings or regex line patterns; merge rows from one LLM call per section."""
+    ss = (section_split or "headings").strip().lower()
+    agg_meta: dict[str, Any]
+    parts: list[tuple[str, str]]
+    target = 0
+
+    if ss == "patterns":
+        compiled = _compile_section_regex_hints(section_regex_hints)
+        if not compiled:
+            raise LlmExtractError(
+                "Section split \"regex patterns\" requires at least one non-empty regex line "
+                "(e.g. a pattern matching lines that start a test case block)."
+            )
+        parts = split_document_by_regex_hints(doc_text, compiled)
+        matched_any = any(
+            p.search(line.strip())
+            for line in doc_text.split("\n")
+            if line.strip()
+            for p in compiled
+        )
+        if not matched_any:
+            log.warning(
+                "Section regex patterns matched no line in %r — entire file is one section.",
+                file_name,
+            )
+        log.info(
+            "LLM section mode (regex): %d pattern(s) → %d chunk(s) for %r",
+            len(compiled),
+            len(parts),
+            file_name,
+        )
+        agg_meta = {
+            "truncated": False,
+            "doc_char_count": len(doc_text),
+            "max_doc_chars": MAX_DOC_CHARS,
+            "llm_section_mode": True,
+            "llm_section_calls": 0,
+            "llm_section_split": "patterns",
+            "llm_pattern_count": len(compiled),
+        }
+    else:
+        target = _resolve_heading_split_level(doc_text, heading_level)
+        parts = split_document_by_headings(doc_text, target)
+        log.info(
+            "LLM section mode (headings): depth=%d → %d chunk(s) for %r",
+            target,
+            len(parts),
+            file_name,
+        )
+        agg_meta = {
+            "truncated": False,
+            "doc_char_count": len(doc_text),
+            "max_doc_chars": MAX_DOC_CHARS,
+            "llm_section_mode": True,
+            "llm_section_calls": 0,
+            "llm_section_split": "headings",
+            "llm_heading_level_used": target,
+        }
+
     all_rows: list[dict[str, str]] = []
     any_trunc = False
     n_calls = 0
+    uh = (user_hints or "").strip()
     for title, body in parts:
         if not body.strip():
             continue
@@ -538,17 +651,12 @@ def extract_with_llm_by_sections(
             timeout=timeout,
             stream=stream,
             section_title=title,
+            user_hints=uh or None,
         )
         any_trunc = any_trunc or bool(meta.get("truncated"))
         all_rows.extend(rows)
-    agg_meta: dict[str, Any] = {
-        "truncated": any_trunc,
-        "doc_char_count": len(doc_text),
-        "max_doc_chars": MAX_DOC_CHARS,
-        "llm_section_mode": True,
-        "llm_section_calls": n_calls,
-        "llm_heading_level_used": target,
-    }
+    agg_meta["truncated"] = any_trunc
+    agg_meta["llm_section_calls"] = n_calls
     return all_rows, agg_meta
 
 
@@ -563,11 +671,15 @@ def extract_with_llm(
     stream: bool | None = None,
     document_scope: str = "whole",
     heading_level: str = "auto",
+    section_split: str = "headings",
+    section_regex_hints: str = "",
+    user_hints: str = "",
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     Call OpenAI-compatible chat/completions. Set document_scope=\"sections\" to split on markdown headings
-    (from Word styles) and run one request per section.
+    or regex line patterns; run one request per section. Optional user_hints text is included in each request.
     """
+    uh = (user_hints or "").strip()
     ds = (document_scope or "whole").strip().lower()
     if ds == "sections":
         return extract_with_llm_by_sections(
@@ -579,6 +691,9 @@ def extract_with_llm(
             timeout=timeout,
             stream=stream,
             heading_level=heading_level,
+            section_split=section_split,
+            section_regex_hints=section_regex_hints,
+            user_hints=uh,
         )
     return _extract_with_llm_single_pass(
         doc_text,
@@ -589,6 +704,7 @@ def extract_with_llm(
         timeout=timeout,
         stream=stream,
         section_title=None,
+        user_hints=uh or None,
     )
 
 

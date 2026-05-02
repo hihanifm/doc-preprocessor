@@ -70,6 +70,8 @@ def _safe_support_save_parts(original: str | None) -> tuple[str, str] | None:
 
 FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with"})
 
+_MAX_LLM_USER_HINT_CHARS = 8000
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
@@ -194,6 +196,9 @@ def extract():
     llm_model = ""
     llm_document_scope = "whole"
     llm_heading_level = "auto"
+    llm_section_split = "headings"
+    llm_section_regex_hints = ""
+    llm_user_hints = ""
     if mode == "llm":
         llm_base_url = request.form.get("llm_base_url", "").strip()
         llm_api_key = request.form.get("llm_api_key", "").strip()
@@ -207,6 +212,23 @@ def extract():
         llm_heading_level = (request.form.get("llm_heading_level") or "auto").strip().lower()
         if llm_heading_level not in ("auto", "1", "2", "3", "4", "5", "6"):
             return jsonify({"error": "llm_heading_level must be auto or 1–6."}), 400
+        llm_section_split = (request.form.get("llm_section_split") or "headings").strip().lower()
+        if llm_section_split not in ("headings", "patterns"):
+            return jsonify({"error": "llm_section_split must be headings or patterns."}), 400
+        llm_section_regex_hints = request.form.get("llm_section_regex_hints") or ""
+        llm_user_hints = (request.form.get("llm_user_hints") or "").strip()
+        if len(llm_user_hints) > _MAX_LLM_USER_HINT_CHARS:
+            return jsonify(
+                {"error": f"Optional hints are too long (max {_MAX_LLM_USER_HINT_CHARS} characters)."}
+            ), 400
+        if llm_document_scope == "sections" and llm_section_split == "patterns":
+            if not llm_section_regex_hints.strip():
+                return jsonify(
+                    {
+                        "error": "Enter at least one regex line for section patterns, or switch split to "
+                        "Markdown headings."
+                    }
+                ), 400
 
     all_rows = []
     errors = []
@@ -263,6 +285,9 @@ def extract():
                         file_name=display_name,
                         document_scope=llm_document_scope,
                         heading_level=llm_heading_level,
+                        section_split=llm_section_split,
+                        section_regex_hints=llm_section_regex_hints,
+                        user_hints=llm_user_hints,
                     )
                     all_rows.extend(rows)
                     if tpl_label not in templates_order:
@@ -279,7 +304,11 @@ def extract():
                     if llm_doc_meta.get("llm_section_mode"):
                         fr_ok["llm_section_mode"] = True
                         fr_ok["llm_section_calls"] = llm_doc_meta.get("llm_section_calls")
-                        fr_ok["llm_heading_level_used"] = llm_doc_meta.get("llm_heading_level_used")
+                        fr_ok["llm_section_split"] = llm_doc_meta.get("llm_section_split")
+                        if llm_doc_meta.get("llm_heading_level_used") is not None:
+                            fr_ok["llm_heading_level_used"] = llm_doc_meta.get("llm_heading_level_used")
+                        if llm_doc_meta.get("llm_pattern_count") is not None:
+                            fr_ok["llm_pattern_count"] = llm_doc_meta.get("llm_pattern_count")
                     file_results.append(fr_ok)
                 except LlmExtractError as le:
                     logger.warning("POST /extract LLM failed file=%r model=%r: %s", display_name, llm_model, le)
