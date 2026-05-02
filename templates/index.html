@@ -242,17 +242,6 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* Filters */
-    #filter-panel {
-      display: none;
-      background: var(--surface);
-      border: 1px solid #e2e8f0;
-      border-radius: var(--radius);
-      padding: 18px 20px;
-      margin-bottom: 20px;
-      box-shadow: var(--shadow);
-    }
-    #filter-panel.visible { display: block; }
     #excel-shrink {
       background: var(--surface);
       border: 1px solid #e2e8f0;
@@ -262,7 +251,7 @@
       margin-top: 4px;
       box-shadow: var(--shadow);
     }
-    #filter-panel h2, #excel-shrink h2 {
+    #excel-shrink h2 {
       font-size: 1rem;
       font-weight: 600;
       margin-bottom: 10px;
@@ -282,26 +271,6 @@
       font-size: 0.85rem;
     }
     .filter-row input[type="text"] { min-width: 160px; flex: 1; max-width: 280px; }
-    .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; min-height: 24px; }
-    .filter-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: #e0f2fe;
-      color: #0369a1;
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 0.78rem;
-    }
-    .filter-chip button {
-      border: none;
-      background: none;
-      cursor: pointer;
-      color: #0369a1;
-      font-size: 1rem;
-      line-height: 1;
-      padding: 0;
-    }
     .peek-panel {
       margin-top: 12px;
       display: none;
@@ -331,13 +300,13 @@
       color: var(--muted);
       font-variant-numeric: tabular-nums;
     }
-    #peek-out-extract, #excel-peek-out { margin-top: 0; }
+    #excel-peek-out { margin-top: 0; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>Docs Garage</h1>
-    <p class="subtitle" id="page-subtitle">Roll Word &amp; Excel into the garage — pull out test cases (plus other structured rows), filter what you need, drive away with a cleaner spreadsheet.</p>
+    <p class="subtitle" id="page-subtitle">Roll Word &amp; Excel into the garage — pull out test cases (plus other structured rows), preview them here, drive away with a spreadsheet.</p>
 
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
@@ -374,31 +343,6 @@
     <div id="doc-preview">
       <h2>Parsed Document Text <span id="preview-file-label" style="font-weight:400;color:#666;"></span></h2>
       <textarea id="doc-preview-text" readonly></textarea>
-    </div>
-
-    <div id="filter-panel">
-      <h2>Filter extracted rows</h2>
-      <p class="hint">
-        Stack filters to shrink the result before download. Distinct values are not loaded until you click <strong>Sample values (table)</strong>.
-      </p>
-      <div class="filter-chips" id="filter-chips"></div>
-      <div class="filter-row">
-        <select id="filter-column" aria-label="Column"></select>
-        <select id="filter-mode" aria-label="Match mode">
-          <option value="contains">Contains</option>
-          <option value="equals">Equals</option>
-          <option value="starts_with">Starts with</option>
-          <option value="not_contains">Does not contain</option>
-        </select>
-        <input type="text" id="filter-needle" placeholder="Text to match (required)" autocomplete="off" />
-        <button type="button" class="btn btn--accent btn--sm" id="filter-add-btn">Add filter</button>
-        <button type="button" class="btn btn--muted btn--sm" id="filter-reset-btn">Clear all filters</button>
-      </div>
-      <div class="filter-row">
-        <button type="button" class="btn btn--muted btn--sm" id="peek-extract-btn">Sample values (table)</button>
-        <span class="hint" style="margin:0;">On demand · max 30 distinct · scans ≤ 8k rows</span>
-      </div>
-      <div id="peek-out-extract" class="peek-panel"></div>
     </div>
 
     <div id="preview-section">
@@ -477,18 +421,9 @@
     }
 
     const COL_KEYS = ['file_name','test_id','test_name','description','preconditions','steps','expected_results'];
-    const COL_LABELS = {
-      file_name: 'File Name',
-      test_id: 'Test ID',
-      test_name: 'Test Name',
-      description: 'Description',
-      preconditions: 'Preconditions',
-      steps: 'Steps',
-      expected_results: 'Expected Results',
-    };
     const PREVIEW_MAX = 200;
     const SUBTITLE_CONVERTER =
-      'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), stack filters, peek values on demand, export Excel.';
+      'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';
     const SUBTITLE_EXCEL =
       'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
 
@@ -547,18 +482,8 @@
     const previewTitle   = document.getElementById('preview-title');
     const previewBody    = document.getElementById('preview-body');
     const docPreview     = document.getElementById('doc-preview');
-    const filterPanel    = document.getElementById('filter-panel');
-    const filterChips    = document.getElementById('filter-chips');
-    const peekOutExtract = document.getElementById('peek-out-extract');
-
     let selectedFiles = [];
     let extractedRows = [];
-    let activeFilters = [];
-
-    (function populateFilterColumnSelect() {
-      const sel = document.getElementById('filter-column');
-      sel.innerHTML = COL_KEYS.map(k => `<option value="${k}">${COL_LABELS[k]}</option>`).join('');
-    })();
 
     function clearExtractSummary() {
       extractSummaryEl.innerHTML = '';
@@ -590,93 +515,6 @@
       extractSummaryEl.innerHTML = '<h3>Extractor template matching</h3>' + rows;
       extractSummaryEl.classList.add('visible');
     }
-
-    function applyOneFilter(rows, column, mode, needle) {
-      const n = (needle || '').trim();
-      if (!n) return rows.slice();
-      const nl = n.toLowerCase();
-      return rows.filter(row => {
-        const cell = String(row[column] ?? '').trim().toLowerCase();
-        if (mode === 'contains') return cell.includes(nl);
-        if (mode === 'equals') return cell === nl;
-        if (mode === 'starts_with') return cell.startsWith(nl);
-        if (mode === 'not_contains') return !cell.includes(nl);
-        return true;
-      });
-    }
-
-    function computeFiltered() {
-      let rows = extractedRows;
-      for (const f of activeFilters) {
-        rows = applyOneFilter(rows, f.column, f.mode, f.needle);
-      }
-      return rows;
-    }
-
-    function renderFilterChips() {
-      filterChips.innerHTML = activeFilters.map((f, i) =>
-        `<span class="filter-chip" data-i="${i}">${esc(COL_LABELS[f.column])}: ${esc(f.mode)} "${esc(f.needle)}" <button type="button" aria-label="Remove filter">&times;</button></span>`
-      ).join('');
-    }
-
-    filterChips.addEventListener('click', e => {
-      const btn = e.target.closest('button');
-      const chip = e.target.closest('.filter-chip');
-      if (!btn || !chip) return;
-      activeFilters.splice(+chip.dataset.i, 1);
-      renderFilterChips();
-      renderPreview(computeFiltered());
-      peekOutExtract.classList.remove('visible');
-      peekOutExtract.innerHTML = '';
-    });
-
-    document.getElementById('filter-add-btn').addEventListener('click', () => {
-      const column = document.getElementById('filter-column').value;
-      const mode = document.getElementById('filter-mode').value;
-      const needle = document.getElementById('filter-needle').value.trim();
-      if (!needle) {
-        setStatus('Enter filter text before adding a filter.', 'error');
-        return;
-      }
-      activeFilters.push({ column, mode, needle });
-      document.getElementById('filter-needle').value = '';
-      renderFilterChips();
-      renderPreview(computeFiltered());
-      peekOutExtract.classList.remove('visible');
-      peekOutExtract.innerHTML = '';
-    });
-
-    document.getElementById('filter-reset-btn').addEventListener('click', () => {
-      activeFilters = [];
-      renderFilterChips();
-      renderPreview(computeFiltered());
-      peekOutExtract.classList.remove('visible');
-      peekOutExtract.innerHTML = '';
-    });
-
-    document.getElementById('peek-extract-btn').addEventListener('click', () => {
-      const column = document.getElementById('filter-column').value;
-      const rows = computeFiltered();
-      const seen = new Set();
-      const out = [];
-      let scanned = 0;
-      let truncated = false;
-      const maxVals = 30;
-      const maxScan = 8000;
-      for (const row of rows) {
-        if (scanned >= maxScan) { truncated = true; break; }
-        scanned++;
-        const v = String(row[column] ?? '').trim();
-        if (!v || seen.has(v)) continue;
-        seen.add(v);
-        out.push(v);
-        if (out.length >= maxVals) { truncated = true; break; }
-      }
-      const colTitle = COL_LABELS[column] || column;
-      const meta =
-        `${out.length} distinct values · scanned ${scanned} row(s)` + (truncated ? ' · truncated' : '');
-      renderDistinctTable(peekOutExtract, colTitle, out, scanned, truncated, meta);
-    });
 
     /* ── Excel shrink ─────────────────────────────────────────────────────── */
     const excelFileInput = document.getElementById('excel-file');
@@ -909,8 +747,6 @@
       previewBtn.disabled = !hasFiles;
       downloadBtn.classList.remove('is-shown');
       extractedRows = [];
-      activeFilters = [];
-      filterPanel.classList.remove('visible');
       docPreview.style.display = 'none';
       clearPreview(); clearStatus();
     }
@@ -930,8 +766,6 @@
         downloadBtn.classList.remove('is-shown');
         docPreview.style.display = 'none';
         extractedRows = [];
-        activeFilters = [];
-        filterPanel.classList.remove('visible');
         clearPreview();
         clearStatus();
       }
@@ -947,11 +781,6 @@
     function clearPreview() {
       previewBody.innerHTML = '';
       previewSection.style.display = 'none';
-      activeFilters = [];
-      filterChips.innerHTML = '';
-      filterPanel.classList.remove('visible');
-      peekOutExtract.classList.remove('visible');
-      peekOutExtract.innerHTML = '';
     }
 
     // ── Load sample ──────────────────────────────────────────────────────────
@@ -1058,10 +887,7 @@
             `<strong>${extractedRows.length}</strong> test case row(s) ready from ${okFiles} file(s).${tplNote}`,
             'ok'
           );
-          activeFilters = [];
-          renderFilterChips();
-          filterPanel.classList.add('visible');
-          renderPreview(computeFiltered());
+          renderPreview(extractedRows);
           downloadBtn.classList.add('is-shown');
         }
       } catch (err) {
@@ -1078,7 +904,7 @@
       const extra = total > PREVIEW_MAX
         ? ` — preview shows first ${PREVIEW_MAX} of ${total} (full set in download)`
         : '';
-      previewTitle.textContent = `Preview — ${total} row(s) after filters${extra}`;
+      previewTitle.textContent = `Preview — ${total} row(s)${extra}`;
       previewBody.innerHTML = slice.map(row =>
         `<tr>${COL_KEYS.map(k => `<td>${esc((row[k] || '').toString())}</td>`).join('')}</tr>`
       ).join('');
@@ -1086,9 +912,8 @@
 
     // ── Download ─────────────────────────────────────────────────────────────
     downloadBtn.addEventListener('click', async () => {
-      const rows = computeFiltered();
-      if (!rows.length) {
-        setStatus('No rows match the current filters.', 'error');
+      if (!extractedRows.length) {
+        setStatus('Nothing to download yet — extract first.', 'error');
         return;
       }
       downloadBtn.disabled = true;
@@ -1096,7 +921,7 @@
         const resp = await fetch('/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rows }),
+          body: JSON.stringify({ rows: extractedRows }),
         });
         if (!resp.ok) {
           const t = await resp.text();
