@@ -24,8 +24,11 @@ python app.py [--host 0.0.0.0] [--port 5000]
 
 ## Environment variables (`.env`)
 
+The app loads `.env` via `python-dotenv` on startup (optional file).
+
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
+| `SUPPORT_UPLOAD_DIR` | No | (unset) | If set, enables **Save for developer**: uploads are stored under this directory (created if needed). Relative paths are resolved from the folder containing `app.py`. Example: `support_uploads` |
 | `LLM_API_KEY` | Yes | — | API key (`"ollama"` for local Ollama) |
 | `LLM_BASE_URL` | No | OpenAI | Override endpoint (e.g. `http://localhost:11434/v1`) |
 | `LLM_MODEL` | No | `gpt-4o` | Model name |
@@ -52,7 +55,9 @@ The document pipeline is linear — upload → normalize to plain text → pick 
 
 5. **`app.py`** — Flask routes include:
    - `GET /` — UI
+   - `GET /health` — status, extractor list, and whether **`support_upload_enabled`** (`SUPPORT_UPLOAD_DIR` is set)
    - `POST /preview-doc` — single `.docx` or `.pdf` → parsed text preview
+   - `POST /support-upload` — optional: saves one `.docx`/`.pdf` into `SUPPORT_UPLOAD_DIR` with a unique filename; returns `{ ok, reference }` for the user to pass to a developer (files are not committed to git; ignore the inbox directory)
    - `POST /extract` — multipart uploads → combined rows + per-file `file_results`
    - `POST /download` — `{rows}` JSON → `.xlsx`
    - `GET /samples/<path>` — static sample files

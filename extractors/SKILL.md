@@ -81,6 +81,7 @@ The Excel exporter (`exporter.py`) expects exactly this set. Missing keys become
 
 - No extractor’s **`matches`** returned `True`.  
 - User-facing copy tells them to ask a developer for a **new module under `extractors/`** using **`samples/`** as reference — that’s this workflow.
+- If the deployment sets **`SUPPORT_UPLOAD_DIR`**, users can **Save for developer** in the UI: the file lands in that on-disk folder with a unique **`reference`** filename the developer can look up (nothing is auto-added to `samples/`).
 
 ## Non-goals (current design)
 

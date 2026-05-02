@@ -301,6 +301,17 @@
       font-variant-numeric: tabular-nums;
     }
     #excel-peek-out { margin-top: 0; }
+    #support-upload-panel {
+      display: none;
+      margin-bottom: 18px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      font-size: 0.9rem;
+    }
+    #support-upload-panel.visible { display: block; }
+    #support-upload-panel .hint { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; }
   </style>
 </head>
 <body>
@@ -331,6 +342,15 @@
     </div>
 
     <div id="file-list"></div>
+
+    <div id="support-upload-panel" aria-live="polite">
+      <strong>Need a new format?</strong>
+      Save the first selected file on the server for your developer, then contact them with the reference shown below.
+      <div class="btn-row" style="margin-top:12px;margin-bottom:8px;">
+        <button type="button" class="btn btn--secondary" id="support-upload-btn" disabled>Save for developer</button>
+      </div>
+      <p id="support-upload-msg" class="hint" hidden></p>
+    </div>
 
     <div class="btn-row">
       <button type="button" class="btn btn--primary" id="extract-btn" disabled>Extract Test Cases</button>
@@ -482,8 +502,31 @@
     const previewTitle   = document.getElementById('preview-title');
     const previewBody    = document.getElementById('preview-body');
     const docPreview     = document.getElementById('doc-preview');
+    const supportUploadPanel = document.getElementById('support-upload-panel');
+    const supportUploadBtn = document.getElementById('support-upload-btn');
+    const supportUploadMsg = document.getElementById('support-upload-msg');
     let selectedFiles = [];
     let extractedRows = [];
+
+    window.__supportUploadEnabled = false;
+    (async function initSupportUpload() {
+      try {
+        const r = await fetch('/health');
+        const d = await r.json();
+        window.__supportUploadEnabled = !!d.support_upload_enabled;
+        if (window.__supportUploadEnabled) {
+          supportUploadPanel.classList.add('visible');
+        }
+      } catch {
+        window.__supportUploadEnabled = false;
+      }
+      syncSupportUploadBtn();
+    })();
+
+    function syncSupportUploadBtn() {
+      if (!window.__supportUploadEnabled) return;
+      supportUploadBtn.disabled = selectedFiles.length === 0;
+    }
 
     function clearExtractSummary() {
       extractSummaryEl.innerHTML = '';
@@ -502,7 +545,10 @@
           return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — matched template <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}</div>`;
         }
         if (fr.reason === 'no_template') {
-          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples).</div>`;
+          const saveHint = window.__supportUploadEnabled
+            ? ' You can also use <strong>Save for developer</strong> above to store this file on the server.'
+            : '';
+          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples).${saveHint}</div>`;
         }
         if (fr.reason === 'unsupported') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — only <code>.docx</code> and digital <code>.pdf</code> files work on this tab.</div>`;
@@ -745,6 +791,9 @@
       const hasFiles = selectedFiles.length > 0;
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
+      syncSupportUploadBtn();
+      supportUploadMsg.hidden = true;
+      supportUploadMsg.textContent = '';
       downloadBtn.classList.remove('is-shown');
       extractedRows = [];
       docPreview.style.display = 'none';
@@ -762,7 +811,10 @@
       const hasFiles = selectedFiles.length > 0;
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
+      syncSupportUploadBtn();
       if (!hasFiles) {
+        supportUploadMsg.hidden = true;
+        supportUploadMsg.textContent = '';
         downloadBtn.classList.remove('is-shown');
         docPreview.style.display = 'none';
         extractedRows = [];
@@ -809,6 +861,26 @@
         setStatus(`Error: ${esc(e.message)}`, 'error');
       } finally {
         samplePdfBtn.disabled = false; samplePdfBtn.textContent = 'Load PDF sample';
+      }
+    });
+
+    supportUploadBtn.addEventListener('click', async () => {
+      if (!window.__supportUploadEnabled || !selectedFiles.length) return;
+      supportUploadBtn.disabled = true;
+      supportUploadMsg.hidden = true;
+      try {
+        const form = new FormData();
+        form.append('file', selectedFiles[0]);
+        const r = await fetch('/support-upload', { method: 'POST', body: form });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Upload failed');
+        supportUploadMsg.innerHTML =
+          `Saved. Please contact your developer and give them this reference: <strong>${esc(d.reference)}</strong>`;
+        supportUploadMsg.hidden = false;
+      } catch (e) {
+        setStatus(`Save for developer: ${esc(e.message)}`, 'error');
+      } finally {
+        syncSupportUploadBtn();
       }
     });
 
@@ -870,7 +942,8 @@
 
         if (!anyRows) {
           if (allNoTemplate) {
-            setStatus('No extractor template matched your file(s). Check the breakdown below and contact your developer for a new template.', 'error');
+            const hint = window.__supportUploadEnabled ? ' Use <strong>Save for developer</strong> if you want the file stored for them.' : '';
+            setStatus(`No extractor template matched your file(s). Check the breakdown below and contact your developer for a new template.${hint}`, 'error');
           } else if (anyOk) {
             setStatus('A template matched, but <strong>zero</strong> test case rows came back. Try another document or ask your developer to adjust the extractor.', 'warning');
           } else if (errors.length) {

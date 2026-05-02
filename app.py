@@ -1,10 +1,16 @@
 import os
+import re
 import subprocess
 import tempfile
+import uuid
+from datetime import datetime, timezone
 
+from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request, Response, send_from_directory
 
 import extractors as extractor_registry
+
+load_dotenv()
 from excel_filter import (
     filter_xlsx_to_bytes,
     peek_distinct,
@@ -18,6 +24,29 @@ from readers.document_reader import read_document
 def _document_suffix(filename: str | None) -> str | None:
     ext = os.path.splitext(filename or "")[1].lower()
     return ext if ext in (".docx", ".pdf") else None
+
+
+def _support_upload_dir_resolved() -> str | None:
+    raw = (os.environ.get("SUPPORT_UPLOAD_DIR") or "").strip()
+    if not raw:
+        return None
+    path = raw if os.path.isabs(raw) else os.path.join(os.path.dirname(os.path.abspath(__file__)), raw)
+    return os.path.normpath(path)
+
+
+def _safe_support_save_parts(original: str | None) -> tuple[str, str] | None:
+    base = os.path.basename(original or "")
+    if not base or base in (".", "..") or ".." in base.replace("\\", "/"):
+        return None
+    stem, ext = os.path.splitext(base)
+    ext = ext.lower()
+    if ext not in (".docx", ".pdf"):
+        return None
+    stem_clean = re.sub(r"[^\w\-.]+", "_", stem, flags=re.UNICODE).strip("._-")[:120]
+    if not stem_clean:
+        stem_clean = "document"
+    return stem_clean, ext
+
 
 FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with"})
 
@@ -42,6 +71,7 @@ def health():
         "commit": _git_commit(),
         "extractors": exts,
         "extractor_count": len(exts),
+        "support_upload_enabled": _support_upload_dir_resolved() is not None,
     })
 
 
@@ -78,6 +108,36 @@ def preview_doc():
                 os.unlink(tmp_path)
             except Exception:
                 pass
+
+
+@app.route("/support-upload", methods=["POST"])
+def support_upload():
+    """Save one .docx/.pdf to SUPPORT_UPLOAD_DIR for developer pickup (optional feature)."""
+    out_dir = _support_upload_dir_resolved()
+    if not out_dir:
+        return jsonify({"error": "Support uploads are not enabled on this server."}), 404
+
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "No file"}), 400
+
+    parts = _safe_support_save_parts(f.filename)
+    if not parts:
+        return jsonify({"error": "Upload a .docx or .pdf with a valid filename."}), 400
+
+    stem_clean, ext = parts
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    short = uuid.uuid4().hex[:8]
+    reference = f"{ts}_{stem_clean}_{short}{ext}"
+    dest_path = os.path.join(out_dir, reference)
+
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        f.save(dest_path)
+    except OSError as e:
+        return jsonify({"error": f"Could not save file: {e}"}), 500
+
+    return jsonify({"ok": True, "reference": reference})
 
 
 @app.route("/extract", methods=["POST"])

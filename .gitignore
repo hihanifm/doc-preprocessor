@@ -14,6 +14,7 @@ pip-cache/*.whl
 .DS_Store
 
 # Uploads / temp
+support_uploads/
 *.docx
 !samples/*.docx
 !static/*.docx
