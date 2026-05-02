@@ -42,10 +42,21 @@ class LlmExtractError(Exception):
     """User-visible LLM extraction failure (no secrets in message)."""
 
 
-def _truncate(doc_text: str) -> str:
-    if len(doc_text) <= MAX_DOC_CHARS:
-        return doc_text
-    return doc_text[:MAX_DOC_CHARS] + "\n\n[... truncated for model context ...]"
+def _truncate(doc_text: str) -> tuple[str, dict[str, Any]]:
+    """Return (text for the model, metadata). Metadata is safe to show in the UI."""
+    n = len(doc_text)
+    if n <= MAX_DOC_CHARS:
+        return doc_text, {
+            "truncated": False,
+            "doc_char_count": n,
+            "max_doc_chars": MAX_DOC_CHARS,
+        }
+    tail = "\n\n[... truncated for model context ...]"
+    return doc_text[:MAX_DOC_CHARS] + tail, {
+        "truncated": True,
+        "doc_char_count": n,
+        "max_doc_chars": MAX_DOC_CHARS,
+    }
 
 
 def _strip_json_fence(content: str) -> str:
@@ -121,17 +132,19 @@ def extract_with_llm(
     model: str,
     file_name: str,
     timeout: float = REQUEST_TIMEOUT_SEC,
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     Call an OpenAI-compatible POST /v1/chat/completions and normalize rows.
     api_key: use literal \"ollama\" for local Ollama.
+
+    Returns (rows, doc_meta) where doc_meta describes input truncation (truncated, doc_char_count, max_doc_chars).
     """
     url = _chat_url(base_url)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    text = _truncate(doc_text)
+    text, doc_meta = _truncate(doc_text)
     user_content = f"Filename: {file_name}\n\n--- Document text ---\n\n{text}"
 
     payload: dict[str, Any] = {
@@ -174,7 +187,7 @@ def extract_with_llm(
         if not isinstance(item, dict):
             continue
         rows.append(_normalize_case(item, file_name))
-    return rows
+    return rows, doc_meta
 
 
 def validate_llm_form(base_url: str, api_key: str, model: str) -> str | None:

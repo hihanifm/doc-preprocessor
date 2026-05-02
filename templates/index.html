@@ -205,7 +205,21 @@
     .extract-summary-row:last-child { border-bottom: none; }
     .extract-summary-row--ok { color: #166534; }
     .extract-summary-row--bad { color: #991b1b; }
+    .extract-summary-row--trunc {
+      display: block;
+      margin-top: 6px;
+      font-size: 0.92em;
+      font-weight: 650;
+      color: #b45309;
+    }
     .extract-summary code { font-size: 0.8em; background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
+    #status .trunc-note {
+      display: block;
+      margin-top: 8px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: #b45309;
+    }
 
     /* Doc preview */
     #doc-preview { display: none; margin-bottom: 24px; }
@@ -712,7 +726,14 @@
         if (fr.ok) {
           const rowPhrase = fr.rows === 1 ? '1 row' : `${fr.rows} rows`;
           const zeroHint = fr.rows === 0 ? ' Ask your developer if this document should yield rows.' : '';
-          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}</div>`;
+          let truncHint = '';
+          if (fr.llm_truncated && fr.llm_doc_chars != null && fr.llm_max_doc_chars != null) {
+            const dc = Number(fr.llm_doc_chars).toLocaleString();
+            const mx = Number(fr.llm_max_doc_chars).toLocaleString();
+            truncHint =
+              `<span class="extract-summary-row--trunc">Document was truncated for the LLM: ${dc} characters in the file; only the first ${mx} were sent.</span>`;
+          }
+          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${truncHint}</div>`;
         }
         if (fr.reason === 'no_template') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples). You can also use <strong>Save for developer</strong> above to store this file on the server.</div>`;
@@ -1104,8 +1125,12 @@
         const fileResults = data.file_results || [];
 
         if (fileResults.length) {
-          errorList.innerHTML = '';
           renderExtractSummary(fileResults);
+          if (extractMode === 'llm' && errors.length) {
+            errorList.innerHTML = errors.map(e => `<div class="error-item">${esc(e)}</div>`).join('');
+          } else {
+            errorList.innerHTML = '';
+          }
         } else if (errors.length) {
           clearExtractSummary();
           errorList.innerHTML = errors.map(e => `<div class="error-item">${esc(e)}</div>`).join('');
@@ -1138,8 +1163,25 @@
             ? ` Extractor template(s): <strong>${esc(data.template)}</strong>.`
             : '';
           const okFiles = fileResults.filter(r => r.ok).length;
+          const truncParts = extractMode === 'llm'
+            ? fileResults.filter(r => r.ok && r.llm_truncated).map(r => {
+                const dc = r.llm_doc_chars != null ? Number(r.llm_doc_chars).toLocaleString() : '';
+                const mx = r.llm_max_doc_chars != null ? Number(r.llm_max_doc_chars).toLocaleString() : '';
+                if (dc && mx) {
+                  return `<strong>${esc(r.filename)}</strong>: ${dc} characters; only the first ${mx} sent to the model`;
+                }
+                return `<strong>${esc(r.filename)}</strong>`;
+              })
+            : [];
+          const truncNote = truncParts.length
+            ? `<span class="trunc-note"><strong>Truncation:</strong> ${truncParts.join('; ')}.</span>`
+            : '';
+          const llmPartialNote =
+            extractMode === 'llm' && errors.length
+              ? `<span class="trunc-note"><strong>LLM issue(s):</strong> one or more files failed — see red messages below.</span>`
+              : '';
           setStatus(
-            `<strong>${extractedRows.length}</strong> test case row(s) ready from ${okFiles} file(s).${tplNote}`,
+            `<strong>${extractedRows.length}</strong> test case row(s) ready from ${okFiles} file(s).${tplNote}${truncNote}${llmPartialNote}`,
             'ok'
           );
           renderPreview(extractedRows);

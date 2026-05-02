@@ -223,7 +223,7 @@ def extract():
             if mode == "llm":
                 tpl_label = f"LLM ({llm_model})"
                 try:
-                    rows = extract_with_llm(
+                    rows, llm_doc_meta = extract_with_llm(
                         doc_text,
                         base_url=llm_base_url,
                         api_key=llm_api_key,
@@ -239,6 +239,9 @@ def extract():
                             "template": tpl_label,
                             "rows": len(rows),
                             "ok": True,
+                            "llm_truncated": bool(llm_doc_meta.get("truncated")),
+                            "llm_doc_chars": llm_doc_meta.get("doc_char_count"),
+                            "llm_max_doc_chars": llm_doc_meta.get("max_doc_chars"),
                         }
                     )
                 except LlmExtractError as le:
