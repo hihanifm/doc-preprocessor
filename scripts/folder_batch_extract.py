@@ -23,6 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urljoin, urlopen
 
 T = TypeVar("T")
@@ -40,6 +41,18 @@ def _guess_mime(path: Path) -> str:
         return "application/pdf"
     mime, _ = mimetypes.guess_type(str(path))
     return mime or "application/octet-stream"
+
+
+def _multipart_file_disposition(file_field_name: str, filename: str) -> str:
+    """Content-Disposition for the file part (RFC 5987 filename* when needed)."""
+    base = f'form-data; name="{file_field_name}"'
+    if not filename:
+        return f"Content-Disposition: {base}; filename=\"\""
+    # Quotes / CR / LF / non-ASCII: use filename* so parsers keep the part.
+    if any(c in filename for c in '"\r\n') or any(ord(c) > 127 for c in filename):
+        enc = quote(filename, safe="")
+        return f"Content-Disposition: {base}; filename*=UTF-8''{enc}"
+    return f'Content-Disposition: {base}; filename="{filename}"'
 
 
 def encode_multipart(
@@ -64,9 +77,7 @@ def encode_multipart(
 
     parts.append(f"--{boundary}".encode())
     parts.append(crlf)
-    disp = (
-        f'Content-Disposition: form-data; name="{file_field_name}"; filename="{filename}"'
-    )
+    disp = _multipart_file_disposition(file_field_name, filename)
     parts.append(disp.encode())
     parts.append(crlf)
     parts.append(f"Content-Type: {content_type}".encode())
@@ -78,7 +89,8 @@ def encode_multipart(
     parts.append(crlf)
 
     body = b"".join(parts)
-    ctype = f"multipart/form-data; boundary={boundary}"
+    # Quoted boundary keeps strict proxies/nginx parsers happy.
+    ctype = f'multipart/form-data; boundary="{boundary}"'
     return ctype, body
 
 

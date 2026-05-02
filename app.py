@@ -32,6 +32,20 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger(__name__)
 
+
+def _client_ip() -> str:
+    xff = (request.headers.get("X-Forwarded-For") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return (request.remote_addr or "-").strip() or "-"
+
+
+def _extract_reject(msg: str):
+    """Log and return 400 JSON for /extract client / validation errors."""
+    logger.warning("POST /extract 400 ip=%s detail=%s", _client_ip(), msg)
+    return jsonify({"error": msg}), 400
+
+
 from excel_filter import (
     filter_xlsx_to_bytes,
     peek_distinct,
@@ -438,11 +452,45 @@ def support_upload():
 
 @app.route("/extract", methods=["POST"])
 def extract():
+    _cl = request.content_length
+    _ct = (request.content_type or "")[:200]
+    logger.info(
+        "POST /extract begin ip=%s content_length=%s content_type=%r werkzeug_files_keys=%s form_field_keys=%s",
+        _client_ip(),
+        _cl if _cl is not None else "?",
+        _ct,
+        list(request.files.keys()),
+        sorted(request.form.keys()),
+    )
+
     files = request.files.getlist("files")
+    fl_single = request.files.get("file")
     if not files:
+        one = fl_single
+        if one and (one.filename or "").strip():
+            files = [one]
+    if not files:
+        logger.warning(
+            "POST /extract 400 no_file_parts ip=%s content_type=%r content_length=%s "
+            "werkzeug_files_keys=%r getlist_files_names=%r get_file_name=%r",
+            _client_ip(),
+            _ct,
+            _cl,
+            list(request.files.keys()),
+            [getattr(x, "filename", None) for x in request.files.getlist("files")],
+            getattr(fl_single, "filename", None) if fl_single else None,
+        )
         return jsonify({"error": "No files uploaded"}), 400
 
     mode = (request.form.get("mode") or "template").strip().lower()
+    upload_names = [(f.filename or "")[:200] for f in files]
+    logger.info(
+        "POST /extract ip=%s mode=%s n_file_parts=%d upload_names=%s",
+        _client_ip(),
+        mode,
+        len(files),
+        upload_names,
+    )
     llm_base_url = ""
     llm_api_key = ""
     llm_model = ""
@@ -458,30 +506,28 @@ def extract():
         llm_model = request.form.get("llm_model", "").strip()
         form_err = validate_llm_form(llm_base_url, llm_api_key, llm_model)
         if form_err:
-            return jsonify({"error": form_err}), 400
+            return _extract_reject(form_err)
         llm_document_scope = (request.form.get("llm_document_scope") or "sections").strip().lower()
         if llm_document_scope not in ("whole", "sections"):
-            return jsonify({"error": "llm_document_scope must be whole or sections."}), 400
+            return _extract_reject("llm_document_scope must be whole or sections.")
         llm_heading_level = (request.form.get("llm_heading_level") or "auto").strip().lower()
         if llm_heading_level not in ("auto", "1", "2", "3", "4", "5", "6"):
-            return jsonify({"error": "llm_heading_level must be auto or 1–6."}), 400
+            return _extract_reject("llm_heading_level must be auto or 1–6.")
         llm_section_split = (request.form.get("llm_section_split") or "headings").strip().lower()
         if llm_section_split not in ("headings", "patterns"):
-            return jsonify({"error": "llm_section_split must be headings or patterns."}), 400
+            return _extract_reject("llm_section_split must be headings or patterns.")
         llm_section_regex_hints = request.form.get("llm_section_regex_hints") or ""
         llm_user_hints = (request.form.get("llm_user_hints") or "").strip()
         if len(llm_user_hints) > _MAX_LLM_USER_HINT_CHARS:
-            return jsonify(
-                {"error": f"Optional hints are too long (max {_MAX_LLM_USER_HINT_CHARS} characters)."}
-            ), 400
+            return _extract_reject(
+                f"Optional hints are too long (max {_MAX_LLM_USER_HINT_CHARS} characters)."
+            )
         if llm_document_scope == "sections" and llm_section_split == "patterns":
             if not llm_section_regex_hints.strip():
-                return jsonify(
-                    {
-                        "error": "Enter at least one regex line for section patterns, or switch split to "
-                        "Markdown headings."
-                    }
-                ), 400
+                return _extract_reject(
+                    "Enter at least one regex line for section patterns, or switch split to "
+                    "Markdown headings."
+                )
         raw_llm_stream = (request.form.get("llm_stream") or "").strip().lower()
         if raw_llm_stream in ("1", "true", "yes", "on"):
             llm_stream = True
@@ -493,6 +539,29 @@ def extract():
     want_stream = mode == "llm" and raw_prog not in ("0", "false", "no", "off")
 
     work_list = _stage_uploaded_files(files)
+    n_staged_ok = sum(1 for w in work_list if w.get("kind") == "ok")
+    n_staged_bad = sum(1 for w in work_list if w.get("kind") == "bad")
+    if mode == "llm":
+        _bu = (llm_base_url or "")[:120]
+        logger.info(
+            "POST /extract staged ip=%s mode=llm staged_ok=%d staged_bad=%d ndjson=%s model=%r "
+            "llm_base_url_prefix=%r scope=%s split=%s",
+            _client_ip(),
+            n_staged_ok,
+            n_staged_bad,
+            want_stream,
+            llm_model,
+            _bu,
+            llm_document_scope,
+            llm_section_split,
+        )
+    else:
+        logger.info(
+            "POST /extract staged ip=%s mode=template staged_ok=%d staged_bad=%d",
+            _client_ip(),
+            n_staged_ok,
+            n_staged_bad,
+        )
 
     if want_stream:
         q: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -515,6 +584,7 @@ def extract():
                     progress=lambda ev: q.put(("p", ev)),
                 )
             except Exception as e:
+                logger.exception("POST /extract ndjson worker failed ip=%s", _client_ip())
                 holder["err"] = e
             finally:
                 q.put(("done", None))
@@ -540,10 +610,18 @@ def extract():
                 return
             pl = holder.get("payload")
             if pl is None:
+                logger.warning("POST /extract ndjson no payload after worker ip=%s", _client_ip())
                 yield (
                     json.dumps({"type": "error", "message": "No extraction result"}, ensure_ascii=False) + "\n"
                 ).encode("utf-8")
                 return
+            logger.info(
+                "POST /extract ndjson done ip=%s rows=%d errors=%d file_results=%d",
+                _client_ip(),
+                len(pl.get("rows") or []),
+                len(pl.get("errors") or []),
+                len(pl.get("file_results") or []),
+            )
             yield (json.dumps({"type": "result", **pl}, ensure_ascii=False) + "\n").encode("utf-8")
 
         return Response(
@@ -552,31 +630,42 @@ def extract():
             headers={"Cache-Control": "no-store", "X-Extract-Stream": "1"},
         )
 
-    return jsonify(
-        _extract_core(
-            work_list,
-            mode=mode,
-            llm_base_url=llm_base_url,
-            llm_api_key=llm_api_key,
-            llm_model=llm_model,
-            llm_document_scope=llm_document_scope,
-            llm_heading_level=llm_heading_level,
-            llm_section_split=llm_section_split,
-            llm_section_regex_hints=llm_section_regex_hints,
-            llm_user_hints=llm_user_hints,
-            llm_stream=llm_stream,
-            progress=None,
-        )
+    out = _extract_core(
+        work_list,
+        mode=mode,
+        llm_base_url=llm_base_url,
+        llm_api_key=llm_api_key,
+        llm_model=llm_model,
+        llm_document_scope=llm_document_scope,
+        llm_heading_level=llm_heading_level,
+        llm_section_split=llm_section_split,
+        llm_section_regex_hints=llm_section_regex_hints,
+        llm_user_hints=llm_user_hints,
+        llm_stream=llm_stream,
+        progress=None,
     )
+    logger.info(
+        "POST /extract done ip=%s mode=%s rows=%d errors=%d file_results=%d",
+        _client_ip(),
+        mode,
+        len(out.get("rows") or []),
+        len(out.get("errors") or []),
+        len(out.get("file_results") or []),
+    )
+    return jsonify(out)
 
 
 @app.route("/download", methods=["POST"])
 def download():
     data = request.get_json()
     if not data or "rows" not in data:
+        logger.warning("POST /download 400 ip=%s missing_json_or_rows", _client_ip())
         return jsonify({"error": "No data provided"}), 400
 
-    xlsx_bytes = to_excel(data["rows"])
+    rows = data["rows"]
+    nrows = len(rows) if isinstance(rows, list) else -1
+    logger.info("POST /download ip=%s rows=%s", _client_ip(), nrows)
+    xlsx_bytes = to_excel(rows)
     return Response(
         xlsx_bytes,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
