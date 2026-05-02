@@ -13,6 +13,7 @@ python scripts/folder_batch_extract.py \
   --mode template
 ```
 
+- On start, the script prints a **`[bulk]`** banner to **stderr** (resolved `POST` URLs, mode, retries, `NO_PROXY` hint if proxy env vars are set) so you can confirm the target server before work begins.
 - Processes **one file per HTTP request** (each `.docx` / `.pdf` → one `.xlsx`).
 - **Non-recursive** by default; use `--recursive` for subfolders.
 - Writes **`Stem.xlsx`** next to each basename; use **`--disambiguate-ext`** if the same stem exists as both `.docx` and `.pdf` (`Stem_docx.xlsx`, `Stem_pdf.xlsx`).

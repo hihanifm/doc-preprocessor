@@ -350,6 +350,85 @@ def parse_env_defaults() -> dict[str, str]:
     return out
 
 
+def _api_urls(base: str) -> tuple[str, str]:
+    b = base.rstrip("/") + "/"
+    return urljoin(b, "extract"), urljoin(b, "download")
+
+
+def _log_proxy_env() -> None:
+    keys = (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    )
+    found = [(k, os.environ[k]) for k in keys if os.environ.get(k)]
+    if not found:
+        return
+    print("[bulk] proxy environment variables are set (urllib may not use direct localhost):", file=sys.stderr)
+    for k, v in found:
+        short = (v[:100] + "…") if len(v) > 100 else v
+        print(f"[bulk]   {k}={short}", file=sys.stderr)
+    no_p = (os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").strip()
+    if no_p:
+        print(f"[bulk] NO_PROXY={no_p}", file=sys.stderr)
+    else:
+        print(
+            "[bulk] hint: if connections to 127.0.0.1 fail, try: "
+            "export NO_PROXY=127.0.0.1,localhost",
+            file=sys.stderr,
+        )
+
+
+def _log_startup(
+    *,
+    args: argparse.Namespace,
+    form: dict[str, str],
+    source: Path,
+    output_dir: Path,
+    log_path: Path,
+    file_count: int,
+    retry_enabled: bool,
+    max_att: int,
+) -> None:
+    extract_u, download_u = _api_urls(args.base_url)
+    print("[bulk] ══ folder_batch_extract ══", file=sys.stderr)
+    print(f"[bulk] source:      {source}", file=sys.stderr)
+    print(f"[bulk] output:      {output_dir}", file=sys.stderr)
+    print(f"[bulk] files:       {file_count} document(s)", file=sys.stderr)
+    print(f"[bulk] failure log: {log_path}", file=sys.stderr)
+    print(f"[bulk] mode:        {form.get('mode', args.mode)}", file=sys.stderr)
+    print(f"[bulk] base-url:    {args.base_url}", file=sys.stderr)
+    print(f"[bulk] POST         {extract_u}", file=sys.stderr)
+    print(f"[bulk] POST         {download_u}", file=sys.stderr)
+    print(f"[bulk] HTTP timeout per request: {args.timeout}s", file=sys.stderr)
+    print(
+        f"[bulk] retries:     {'on' if retry_enabled else 'off'} "
+        f"(max {max_att} attempt(s) per extract/download)",
+        file=sys.stderr,
+    )
+    print(
+        f"[bulk] skip exists: {'no (--force)' if args.force else 'yes (default — resume friendly)'}",
+        file=sys.stderr,
+    )
+    if (form.get("mode") or "").strip().lower() == "llm":
+        print(
+            f"[bulk] llm scope:   {args.llm_document_scope} · split={args.llm_section_split}",
+            file=sys.stderr,
+        )
+        print(f"[bulk] llm model:   {args.llm_model}", file=sys.stderr)
+        print(f"[bulk] llm base:    {args.llm_base_url}", file=sys.stderr)
+        print(
+            "[bulk] llm progress stream (NDJSON / section lines on stderr): "
+            f"{'off (--no-llm-progress-stream)' if args.no_llm_progress_stream else 'on (default)'}",
+            file=sys.stderr,
+        )
+    _log_proxy_env()
+    print("[bulk] ══════════════════════════", file=sys.stderr)
+
+
 def main() -> int:
     env = parse_env_defaults()
     parser = argparse.ArgumentParser(
@@ -511,6 +590,17 @@ def main() -> int:
 
     retry_enabled = not args.no_retry
     max_att = max(1, args.max_retries)
+
+    _log_startup(
+        args=args,
+        form=form,
+        source=source,
+        output_dir=output_dir,
+        log_path=log_path,
+        file_count=len(files),
+        retry_enabled=retry_enabled,
+        max_att=max_att,
+    )
 
     failures: list[dict[str, Any]] = []
     ok_count = 0
