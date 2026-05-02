@@ -13,7 +13,6 @@ import os
 import re
 import threading
 import time
-from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -373,7 +372,8 @@ _LLM_RPM_WINDOW_SEC = 60.0
 
 def _env_llm_rpm() -> int:
     """
-    Max chat/completions calls per rolling minute (process-wide).
+    Max chat/completions calls per fixed-length window (process-wide): burst up to this many,
+    then sleep until the window ends and the counter fully resets (not a sliding window).
     LLM_RPM (preferred); falls back to legacy LLM_MAX_CALLS. Default 3.
     Zero or negative = no limit.
     """
@@ -385,28 +385,40 @@ def _env_llm_rpm() -> int:
 
 
 class LlmChatRateLimiter:
-    """Sliding window: at most max_calls events per window_sec (wall-clock via monotonic deltas)."""
+    """Fixed window: up to max_calls per window_sec; when full, wait until window ends then reset to 0."""
 
-    __slots__ = ("max_calls", "window_sec", "_lock", "_times")
+    __slots__ = ("max_calls", "window_sec", "_lock", "_period_start", "_count")
 
     def __init__(self, max_calls: int, window_sec: float) -> None:
         self.max_calls = max_calls
         self.window_sec = window_sec
         self._lock = threading.Lock()
-        self._times: deque[float] = deque()
+        self._period_start: float | None = None
+        self._count = 0
 
     def acquire(self) -> None:
         while True:
             with self._lock:
                 now = time.monotonic()
-                while self._times and now - self._times[0] >= self.window_sec:
-                    self._times.popleft()
-                if len(self._times) < self.max_calls:
-                    self._times.append(time.monotonic())
+                if self._period_start is None:
+                    self._period_start = now
+                    self._count = 0
+                if now - self._period_start >= self.window_sec:
+                    self._period_start = now
+                    self._count = 0
+                if self._count < self.max_calls:
+                    self._count += 1
                     return
-                wait = self.window_sec - (now - self._times[0]) + 0.02
-            w = max(min(wait, 120.0), 0.05)
-            log.debug("LLM rate limit: sleeping %.2fs (max %d per %.0fs)", w, self.max_calls, self.window_sec)
+                wait = self._period_start + self.window_sec - now
+            w = max(min(wait, 300.0), 0.05)
+            log.info(
+                "LLM_RPM throttle: window full (%d calls / %ds); pausing %.1fs until period resets "
+                "(then next %d calls allowed immediately — LLM_RPM=0 disables)",
+                self.max_calls,
+                int(self.window_sec),
+                w,
+                self.max_calls,
+            )
             time.sleep(w)
 
 
@@ -416,7 +428,7 @@ _llm_rpm_limiter_global_lock = threading.Lock()
 
 
 def _rate_limit_llm_chat() -> None:
-    """Wait if needed so chat/completions calls stay under LLM_RPM per minute (global)."""
+    """Wait if needed so chat/completions calls stay under LLM_RPM per fixed minute-sized window (global)."""
     rpm = _env_llm_rpm()
     if rpm <= 0:
         return
@@ -914,7 +926,7 @@ def extract_with_llm(
     In section mode, a section with an empty body but a VZ_TC_* id in the title yields a placeholder Excel row
     (no LLM call); see extract_vz_tc_id in llm_document_filter.
 
-    Chat calls are throttled process-wide: LLM_RPM (default 3) per rolling minute — see _rate_limit_llm_chat.
+    Chat calls are throttled process-wide: LLM_RPM (default 3) per fixed 60s window (full reset after each wait) — see _rate_limit_llm_chat.
     """
     doc_text, prep_meta = prepare_text_for_llm(doc_text)
     if prep_meta.get("llm_prep_stripped"):

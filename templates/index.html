@@ -568,7 +568,7 @@
           </label>
         </div>
         <p class="hint" id="llm-section-hint"><strong>By section:</strong> either split at Word <em>Heading</em> styles (<code>#</code> lines) or at regex matches — useful when titles carry ids like <code>x_y_z</code>. Hints help the model map those ids to <code>test_id</code>. PDFs often lack <code>#</code> lines — try regex or whole file.</p>
-        <p class="hint">The server may <strong>throttle LLM traffic</strong> (default <strong>3 chat requests per minute</strong>, rolling window) via <code>LLM_RPM</code> in <code>.env</code>. Section-by-section runs wait automatically between calls.</p>
+        <p class="hint">The server may <strong>throttle LLM traffic</strong> via <code>LLM_RPM</code> in <code>.env</code> (default <strong>3 per 60s fixed window</strong>): you get up to 3 calls, then a pause until that minute-long window finishes and the limit <strong>fully resets</strong>. Local Ollama: often <code>LLM_RPM=0</code>.</p>
         <p id="llm-models-hint" class="hint" aria-live="polite"></p>
       </div>
     </div>
