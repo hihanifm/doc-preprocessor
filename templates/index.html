@@ -276,6 +276,36 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Extract — live progress (elapsed + phase text while /extract runs) */
+    #status.loading .extract-progress {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid #bfdbfe;
+      background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%);
+      max-width: 520px;
+    }
+    #status.loading .extract-progress__body { flex: 1; min-width: 0; }
+    #status.loading .extract-progress__phase {
+      font-weight: 650;
+      color: #1e40af;
+      line-height: 1.35;
+    }
+    #status.loading .extract-progress__meta {
+      margin-top: 4px;
+      font-size: 0.82rem;
+      color: #64748b;
+      font-variant-numeric: tabular-nums;
+    }
+    #status.loading .extract-progress__hint {
+      margin-top: 6px;
+      font-size: 0.78rem;
+      color: #64748b;
+      font-style: italic;
+    }
+
     #excel-shrink {
       background: var(--surface);
       border: 1px solid #e2e8f0;
@@ -1044,6 +1074,69 @@
       }
     }
 
+    let extractProgressTimer = null;
+
+    function stopExtractProgress() {
+      if (extractProgressTimer != null) {
+        clearInterval(extractProgressTimer);
+        extractProgressTimer = null;
+      }
+    }
+
+    function formatExtractElapsed(ms) {
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return `${s}s`;
+      const m = Math.floor(s / 60);
+      const rs = s % 60;
+      return `${m}m ${rs.toString().padStart(2, '0')}s`;
+    }
+
+    function buildExtractLoadingHtml(extractMode, fileCount, elapsedMs) {
+      const nf = fileCount === 1 ? '1 file' : `${fileCount} files`;
+      const elapsed = formatExtractElapsed(elapsedMs);
+      let phase = '';
+      let hint = '';
+      if (extractMode === 'llm') {
+        if (elapsedMs < 1500) phase = 'Uploading files…';
+        else if (elapsedMs < 3500) phase = 'Reading documents on the server…';
+        else if (elapsedMs < 12000) phase = 'Calling the language model…';
+        else if (elapsedMs < 60000) phase = 'Waiting for the model response…';
+        else {
+          phase = 'Still extracting…';
+          hint = 'Large documents or remote models can take several minutes. This page will update when the server responds.';
+        }
+      } else {
+        if (elapsedMs < 1500) phase = 'Uploading files…';
+        else if (elapsedMs < 3500) phase = 'Parsing Word/PDF text…';
+        else if (elapsedMs < 7000) phase = 'Matching extractor templates…';
+        else phase = 'Building rows…';
+      }
+      const meta = `${nf} · ${elapsed} elapsed`;
+      const hintBlock = hint
+        ? `<div class="extract-progress__hint">${esc(hint)}</div>`
+        : '';
+      return (
+        '<div class="extract-progress" role="status" aria-live="polite" aria-busy="true">' +
+        '<span class="spinner" aria-hidden="true"></span>' +
+        '<div class="extract-progress__body">' +
+        `<div class="extract-progress__phase">${esc(phase)}</div>` +
+        `<div class="extract-progress__meta">${esc(meta)}</div>` +
+        hintBlock +
+        '</div></div>'
+      );
+    }
+
+    function startExtractProgress(extractMode, fileCount) {
+      stopExtractProgress();
+      const start = Date.now();
+      const tick = () => {
+        const elapsedMs = Date.now() - start;
+        setStatus(buildExtractLoadingHtml(extractMode, fileCount, elapsedMs), 'loading');
+      };
+      tick();
+      extractProgressTimer = setInterval(tick, 450);
+    }
+
     function setStatus(msg, cls) { statusEl.className = cls || ''; statusEl.innerHTML = msg; }
     function clearStatus() {
       statusEl.innerHTML = '';
@@ -1130,14 +1223,17 @@
     // ── Extract ──────────────────────────────────────────────────────────────
     extractBtn.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
-      extractBtn.disabled = true; downloadBtn.classList.remove('is-shown');
+      extractBtn.disabled = true;
+      extractBtn.setAttribute('aria-busy', 'true');
+      extractBtn.dataset.prevLabel = extractBtn.textContent;
+      extractBtn.textContent = 'Working…';
+      downloadBtn.classList.remove('is-shown');
       clearPreview();
       clearStatus();
-      setStatus('<span class="spinner"></span>Extracting…', 'loading');
-
       const form = new FormData();
       selectedFiles.forEach(f => form.append('files', f));
       const extractMode = document.querySelector('input[name="extract-mode"]:checked').value;
+      startExtractProgress(extractMode, selectedFiles.length);
       form.append('mode', extractMode);
       if (extractMode === 'llm') {
         form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
@@ -1220,7 +1316,11 @@
       } catch (err) {
         setStatus(`Error: ${esc(err.message)}`, 'error');
       } finally {
+        stopExtractProgress();
         extractBtn.disabled = false;
+        extractBtn.removeAttribute('aria-busy');
+        extractBtn.textContent = extractBtn.dataset.prevLabel || 'Extract Test Cases';
+        delete extractBtn.dataset.prevLabel;
       }
     });
 
