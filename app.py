@@ -26,11 +26,13 @@ def _document_suffix(filename: str | None) -> str | None:
     return ext if ext in (".docx", ".pdf") else None
 
 
-def _support_upload_dir_resolved() -> str | None:
+_DEFAULT_SUPPORT_UPLOAD_DIR = "support_uploads"
+
+
+def _support_upload_dir_resolved() -> str:
     raw = (os.environ.get("SUPPORT_UPLOAD_DIR") or "").strip()
-    if not raw:
-        return None
-    path = raw if os.path.isabs(raw) else os.path.join(os.path.dirname(os.path.abspath(__file__)), raw)
+    rel = raw if raw else _DEFAULT_SUPPORT_UPLOAD_DIR
+    path = rel if os.path.isabs(rel) else os.path.join(os.path.dirname(os.path.abspath(__file__)), rel)
     return os.path.normpath(path)
 
 
@@ -71,7 +73,7 @@ def health():
         "commit": _git_commit(),
         "extractors": exts,
         "extractor_count": len(exts),
-        "support_upload_enabled": _support_upload_dir_resolved() is not None,
+        "support_upload_enabled": True,
     })
 
 
@@ -112,10 +114,8 @@ def preview_doc():
 
 @app.route("/support-upload", methods=["POST"])
 def support_upload():
-    """Save one .docx/.pdf to SUPPORT_UPLOAD_DIR for developer pickup (optional feature)."""
+    """Save one .docx/.pdf under SUPPORT_UPLOAD_DIR (default: ./support_uploads)."""
     out_dir = _support_upload_dir_resolved()
-    if not out_dir:
-        return jsonify({"error": "Support uploads are not enabled on this server."}), 404
 
     f = request.files.get("file")
     if not f:

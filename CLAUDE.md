@@ -28,7 +28,7 @@ The app loads `.env` via `python-dotenv` on startup (optional file).
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `SUPPORT_UPLOAD_DIR` | No | (unset) | If set, enables **Save for developer**: uploads are stored under this directory (created if needed). Relative paths are resolved from the folder containing `app.py`. Example: `support_uploads` |
+| `SUPPORT_UPLOAD_DIR` | No | `support_uploads` | **Save for developer** inbox (always on). Relative paths resolve from the folder containing `app.py`; omit `.env` entirely to use the default folder next to `app.py`. |
 | `LLM_API_KEY` | Yes | — | API key (`"ollama"` for local Ollama) |
 | `LLM_BASE_URL` | No | OpenAI | Override endpoint (e.g. `http://localhost:11434/v1`) |
 | `LLM_MODEL` | No | `gpt-4o` | Model name |
@@ -55,9 +55,9 @@ The document pipeline is linear — upload → normalize to plain text → pick 
 
 5. **`app.py`** — Flask routes include:
    - `GET /` — UI
-   - `GET /health` — status, extractor list, and whether **`support_upload_enabled`** (`SUPPORT_UPLOAD_DIR` is set)
+   - `GET /health` — status, extractor list; **`support_upload_enabled`** is always true (inbox uses `SUPPORT_UPLOAD_DIR` or default `support_uploads`)
    - `POST /preview-doc` — single `.docx` or `.pdf` → parsed text preview
-   - `POST /support-upload` — optional: saves one `.docx`/`.pdf` into `SUPPORT_UPLOAD_DIR` with a unique filename; returns `{ ok, reference }` for the user to pass to a developer (files are not committed to git; ignore the inbox directory)
+   - `POST /support-upload` — saves one `.docx`/`.pdf` into `SUPPORT_UPLOAD_DIR` (default `./support_uploads`) with a unique filename; returns `{ ok, reference }` (inbox is gitignored)
    - `POST /extract` — multipart uploads → combined rows + per-file `file_results`
    - `POST /download` — `{rows}` JSON → `.xlsx`
    - `GET /samples/<path>` — static sample files
