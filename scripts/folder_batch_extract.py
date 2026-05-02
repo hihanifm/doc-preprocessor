@@ -28,6 +28,14 @@ from urllib.request import Request, urljoin, urlopen
 
 T = TypeVar("T")
 
+# One id per `main()` run — prefix every line so background/no-GTTY logs stay grep-friendly.
+_BULK_PREFIX = "[bulk]"
+
+
+def _bulk_line(msg: str, *, file=sys.stderr, flush: bool = False) -> None:
+    print(f"{_BULK_PREFIX} {msg}", file=file, flush=flush)
+
+
 # Backoff before each retry after a failure (first retry waits 5s, … then cap at 640s).
 RETRY_DELAYS_SEC = (5, 10, 20, 40, 80, 160, 320, 640)
 RETRYABLE_HTTP = frozenset({408, 429, 500, 502, 503, 504})
@@ -153,7 +161,7 @@ def _parse_ndjson_extract_response(resp) -> dict[str, Any]:
                 payload = o.get("data") or {}
                 msg = _format_ndjson_progress_line(payload)
                 if msg:
-                    print(f"  llm: {msg}", file=sys.stderr, flush=True)
+                    _bulk_line(f"  llm: {msg}", flush=True)
             elif typ == "result":
                 last = o
             elif typ == "error":
@@ -285,9 +293,8 @@ def call_with_retry(
             if not is_retryable(e) or attempt >= max_attempts - 1:
                 raise
             delay = RETRY_DELAYS_SEC[min(attempt, len(RETRY_DELAYS_SEC) - 1)]
-            print(
+            _bulk_line(
                 f"  retry {attempt + 2}/{max_attempts} in {delay}s ({op_name}): {e}",
-                file=sys.stderr,
                 flush=True,
             )
             time.sleep(delay)
@@ -383,19 +390,15 @@ def _log_proxy_env() -> None:
     found = [(k, os.environ[k]) for k in keys if os.environ.get(k)]
     if not found:
         return
-    print("[bulk] proxy environment variables are set (urllib may not use direct localhost):", file=sys.stderr)
+    _bulk_line("proxy environment variables are set (urllib may not use direct localhost):")
     for k, v in found:
         short = (v[:100] + "…") if len(v) > 100 else v
-        print(f"[bulk]   {k}={short}", file=sys.stderr)
+        _bulk_line(f"  {k}={short}")
     no_p = (os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or "").strip()
     if no_p:
-        print(f"[bulk] NO_PROXY={no_p}", file=sys.stderr)
+        _bulk_line(f"NO_PROXY={no_p}")
     else:
-        print(
-            "[bulk] hint: if connections to 127.0.0.1 fail, try: "
-            "export NO_PROXY=127.0.0.1,localhost",
-            file=sys.stderr,
-        )
+        _bulk_line("hint: if connections to 127.0.0.1 fail, try: export NO_PROXY=127.0.0.1,localhost")
 
 
 def _log_startup(
@@ -410,39 +413,31 @@ def _log_startup(
     max_att: int,
 ) -> None:
     extract_u, download_u = _api_urls(args.base_url)
-    print("[bulk] ══ folder_batch_extract ══", file=sys.stderr)
-    print(f"[bulk] source:      {source}", file=sys.stderr)
-    print(f"[bulk] output:      {output_dir}", file=sys.stderr)
-    print(f"[bulk] files:       {file_count} document(s)", file=sys.stderr)
-    print(f"[bulk] failure log: {log_path}", file=sys.stderr)
-    print(f"[bulk] mode:        {form.get('mode', args.mode)}", file=sys.stderr)
-    print(f"[bulk] base-url:    {args.base_url}", file=sys.stderr)
-    print(f"[bulk] POST         {extract_u}", file=sys.stderr)
-    print(f"[bulk] POST         {download_u}", file=sys.stderr)
-    print(f"[bulk] HTTP timeout per request: {args.timeout}s", file=sys.stderr)
-    print(
-        f"[bulk] retries:     {'on' if retry_enabled else 'off'} "
-        f"(max {max_att} attempt(s) per extract/download)",
-        file=sys.stderr,
+    _bulk_line("══ folder_batch_extract ══")
+    _bulk_line(f"source:      {source}")
+    _bulk_line(f"output:      {output_dir}")
+    _bulk_line(f"files:       {file_count} document(s)")
+    _bulk_line(f"failure log: {log_path}")
+    _bulk_line(f"mode:        {form.get('mode', args.mode)}")
+    _bulk_line(f"base-url:    {args.base_url}")
+    _bulk_line(f"POST         {extract_u}")
+    _bulk_line(f"POST         {download_u}")
+    _bulk_line(f"HTTP timeout per request: {args.timeout}s")
+    _bulk_line(
+        f"retries:     {'on' if retry_enabled else 'off'} "
+        f"(max {max_att} attempt(s) per extract/download)"
     )
-    print(
-        f"[bulk] skip exists: {'no (--force)' if args.force else 'yes (default — resume friendly)'}",
-        file=sys.stderr,
-    )
+    _bulk_line(f"skip exists: {'no (--force)' if args.force else 'yes (default — resume friendly)'}")
     if (form.get("mode") or "").strip().lower() == "llm":
-        print(
-            f"[bulk] llm scope:   {args.llm_document_scope} · split={args.llm_section_split}",
-            file=sys.stderr,
-        )
-        print(f"[bulk] llm model:   {args.llm_model}", file=sys.stderr)
-        print(f"[bulk] llm base:    {args.llm_base_url}", file=sys.stderr)
-        print(
-            "[bulk] llm progress stream (NDJSON / section lines on stderr): "
-            f"{'off (--no-llm-progress-stream)' if args.no_llm_progress_stream else 'on (default)'}",
-            file=sys.stderr,
+        _bulk_line(f"llm scope:   {args.llm_document_scope} · split={args.llm_section_split}")
+        _bulk_line(f"llm model:   {args.llm_model}")
+        _bulk_line(f"llm base:    {args.llm_base_url}")
+        _bulk_line(
+            "llm progress stream (NDJSON / section lines on stderr): "
+            f"{'off (--no-llm-progress-stream)' if args.no_llm_progress_stream else 'on (default)'}"
         )
     _log_proxy_env()
-    print("[bulk] ══════════════════════════", file=sys.stderr)
+    _bulk_line("══════════════════════════")
 
 
 def main() -> int:
@@ -562,6 +557,9 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    global _BULK_PREFIX
+    _BULK_PREFIX = f"[bulk run={uuid.uuid4().hex[:10]}]"
+
     hints_raw = args.llm_section_regex_hints.strip()
     if hints_raw:
         p = Path(hints_raw)
@@ -572,24 +570,17 @@ def main() -> int:
 
     if args.mode == "llm":
         if not args.llm_base_url or not args.llm_model:
-            print(
-                "LLM mode requires --llm-base-url and --llm-model "
-                "(and usually --llm-api-key).",
-                file=sys.stderr,
-            )
+            _bulk_line("LLM mode requires --llm-base-url and --llm-model (and usually --llm-api-key).")
             return 2
         if args.llm_document_scope == "sections" and args.llm_section_split == "patterns":
             if not args.llm_section_regex_hints.strip():
-                print(
-                    "patterns split requires non-empty --llm-section-regex-hints.",
-                    file=sys.stderr,
-                )
+                _bulk_line("patterns split requires non-empty --llm-section-regex-hints.")
                 return 2
 
     source = args.source.resolve()
     output_dir = args.output.resolve()
     if not source.is_dir():
-        print(f"Not a directory: {source}", file=sys.stderr)
+        _bulk_line(f"Not a directory: {source}")
         return 2
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -601,7 +592,7 @@ def main() -> int:
     llm_progress_stream = args.mode == "llm" and not args.no_llm_progress_stream
     files = discover_inputs(source, args.recursive)
     if not files:
-        print(f"No .docx or .pdf files in {source}", file=sys.stderr)
+        _bulk_line(f"No .docx or .pdf files in {source}")
         return 1
 
     retry_enabled = not args.no_retry
@@ -624,11 +615,11 @@ def main() -> int:
 
     for idx, doc_path in enumerate(files, start=1):
         rel = doc_path.name
-        print(f"[{idx}/{len(files)}] {doc_path}", flush=True)
+        _bulk_line(f"[{idx}/{len(files)}] {doc_path}", file=sys.stdout, flush=True)
         out_xlsx = output_path_for(doc_path, output_dir, args.disambiguate_ext)
         if not args.force and out_xlsx.is_file():
             skip_count += 1
-            print(f"  skip: output exists → {out_xlsx.name}", flush=True)
+            _bulk_line(f"  skip: output exists → {out_xlsx.name}", file=sys.stdout, flush=True)
             continue
 
         try:
@@ -663,7 +654,7 @@ def main() -> int:
                     "errors": errs,
                 }
                 failures.append(rec)
-                print(f"  FAILED: {fr.get('reason')} {fr.get('detail', '')}", file=sys.stderr)
+                _bulk_line(f"  FAILED: {fr.get('reason')} {fr.get('detail', '')}")
                 with log_path.open("a", encoding="utf-8") as lf:
                     lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 if args.fail_fast:
@@ -672,12 +663,12 @@ def main() -> int:
 
             if errs:
                 for e in errs:
-                    print(f"  warning: {e}", file=sys.stderr)
+                    _bulk_line(f"  warning: {e}")
 
             if args.skip_empty_rows and len(rows) == 0:
                 rec = {"file": rel, "phase": "rows", "error": "zero rows"}
                 failures.append(rec)
-                print("  WARNING: zero rows", file=sys.stderr)
+                _bulk_line("  WARNING: zero rows")
                 with log_path.open("a", encoding="utf-8") as lf:
                     lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 if args.fail_fast:
@@ -685,7 +676,7 @@ def main() -> int:
                 continue
 
             if len(rows) == 0:
-                print("  skip: zero rows (no .xlsx written)")
+                _bulk_line("  skip: zero rows (no .xlsx written)", file=sys.stdout)
                 continue
 
             def do_download() -> bytes:
@@ -700,12 +691,12 @@ def main() -> int:
 
             out_xlsx.write_bytes(xlsx_bytes)
             ok_count += 1
-            print(f"  -> {out_xlsx}")
+            _bulk_line(f"  -> {out_xlsx}", file=sys.stdout)
 
         except (URLError, RuntimeError, json.JSONDecodeError) as e:
             rec = {"file": rel, "phase": "extract", "error": str(e)}
             failures.append(rec)
-            print(f"  ERROR extract: {e}", file=sys.stderr)
+            _bulk_line(f"  ERROR extract: {e}")
             with log_path.open("a", encoding="utf-8") as lf:
                 lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if args.fail_fast:
@@ -713,7 +704,7 @@ def main() -> int:
         except Exception as e:
             rec = {"file": rel, "phase": "unexpected", "error": repr(e)}
             failures.append(rec)
-            print(f"  ERROR unexpected: {e}", file=sys.stderr)
+            _bulk_line(f"  ERROR unexpected: {e}")
             with log_path.open("a", encoding="utf-8") as lf:
                 lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if args.fail_fast:
@@ -724,7 +715,7 @@ def main() -> int:
         f"skipped {skip_count} existing",
         f"failures logged {len(failures)}",
     ]
-    print(f"Done. {', '.join(parts)}.")
+    _bulk_line(f"Done. {', '.join(parts)}.", file=sys.stdout)
     if failures and args.strict_exit:
         return 1
     return 0

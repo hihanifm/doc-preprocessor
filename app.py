@@ -19,18 +19,24 @@ load_dotenv()
 
 
 def _configure_logging() -> None:
-    if logging.root.handlers:
-        return
     level_name = (os.environ.get("LOG_LEVEL") or "INFO").strip().upper()
     level = getattr(logging, level_name, logging.INFO)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    fmt = "%(asctime)s %(levelname)s %(name)s %(message)s"
+    if not logging.root.handlers:
+        logging.basicConfig(level=level, format=fmt)
+    else:
+        # Gunicorn (and others) install root handlers before we import; still honor LOG_LEVEL.
+        logging.getLogger().setLevel(level)
+    logging.getLogger(__name__).setLevel(level)
 
 
 _configure_logging()
 logger = logging.getLogger(__name__)
+
+
+class _ExtractRequestLogAdapter(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return "req_id=%s %s" % (self.extra.get("req_id", "-"), msg), kwargs
 
 
 def _client_ip() -> str:
@@ -40,9 +46,9 @@ def _client_ip() -> str:
     return (request.remote_addr or "-").strip() or "-"
 
 
-def _extract_reject(msg: str):
+def _extract_reject(msg: str, *, req_id: str = "-"):
     """Log and return 400 JSON for /extract client / validation errors."""
-    logger.warning("POST /extract 400 ip=%s detail=%s", _client_ip(), msg)
+    logger.warning("POST /extract 400 ip=%s req_id=%s detail=%s", _client_ip(), req_id, msg)
     return jsonify({"error": msg}), 400
 
 
@@ -452,9 +458,11 @@ def support_upload():
 
 @app.route("/extract", methods=["POST"])
 def extract():
+    req_id = uuid.uuid4().hex[:12]
+    log = _ExtractRequestLogAdapter(logger, {"req_id": req_id})
     _cl = request.content_length
     _ct = (request.content_type or "")[:200]
-    logger.info(
+    log.info(
         "POST /extract begin ip=%s content_length=%s content_type=%r werkzeug_files_keys=%s form_field_keys=%s",
         _client_ip(),
         _cl if _cl is not None else "?",
@@ -470,7 +478,7 @@ def extract():
         if one and (one.filename or "").strip():
             files = [one]
     if not files:
-        logger.warning(
+        log.warning(
             "POST /extract 400 no_file_parts ip=%s content_type=%r content_length=%s "
             "werkzeug_files_keys=%r getlist_files_names=%r get_file_name=%r",
             _client_ip(),
@@ -484,7 +492,7 @@ def extract():
 
     mode = (request.form.get("mode") or "template").strip().lower()
     upload_names = [(f.filename or "")[:200] for f in files]
-    logger.info(
+    log.info(
         "POST /extract ip=%s mode=%s n_file_parts=%d upload_names=%s",
         _client_ip(),
         mode,
@@ -506,27 +514,29 @@ def extract():
         llm_model = request.form.get("llm_model", "").strip()
         form_err = validate_llm_form(llm_base_url, llm_api_key, llm_model)
         if form_err:
-            return _extract_reject(form_err)
+            return _extract_reject(form_err, req_id=req_id)
         llm_document_scope = (request.form.get("llm_document_scope") or "sections").strip().lower()
         if llm_document_scope not in ("whole", "sections"):
-            return _extract_reject("llm_document_scope must be whole or sections.")
+            return _extract_reject("llm_document_scope must be whole or sections.", req_id=req_id)
         llm_heading_level = (request.form.get("llm_heading_level") or "auto").strip().lower()
         if llm_heading_level not in ("auto", "1", "2", "3", "4", "5", "6"):
-            return _extract_reject("llm_heading_level must be auto or 1–6.")
+            return _extract_reject("llm_heading_level must be auto or 1–6.", req_id=req_id)
         llm_section_split = (request.form.get("llm_section_split") or "headings").strip().lower()
         if llm_section_split not in ("headings", "patterns"):
-            return _extract_reject("llm_section_split must be headings or patterns.")
+            return _extract_reject("llm_section_split must be headings or patterns.", req_id=req_id)
         llm_section_regex_hints = request.form.get("llm_section_regex_hints") or ""
         llm_user_hints = (request.form.get("llm_user_hints") or "").strip()
         if len(llm_user_hints) > _MAX_LLM_USER_HINT_CHARS:
             return _extract_reject(
-                f"Optional hints are too long (max {_MAX_LLM_USER_HINT_CHARS} characters)."
+                f"Optional hints are too long (max {_MAX_LLM_USER_HINT_CHARS} characters).",
+                req_id=req_id,
             )
         if llm_document_scope == "sections" and llm_section_split == "patterns":
             if not llm_section_regex_hints.strip():
                 return _extract_reject(
                     "Enter at least one regex line for section patterns, or switch split to "
-                    "Markdown headings."
+                    "Markdown headings.",
+                    req_id=req_id,
                 )
         raw_llm_stream = (request.form.get("llm_stream") or "").strip().lower()
         if raw_llm_stream in ("1", "true", "yes", "on"):
@@ -543,7 +553,7 @@ def extract():
     n_staged_bad = sum(1 for w in work_list if w.get("kind") == "bad")
     if mode == "llm":
         _bu = (llm_base_url or "")[:120]
-        logger.info(
+        log.info(
             "POST /extract staged ip=%s mode=llm staged_ok=%d staged_bad=%d ndjson=%s model=%r "
             "llm_base_url_prefix=%r scope=%s split=%s",
             _client_ip(),
@@ -556,7 +566,7 @@ def extract():
             llm_section_split,
         )
     else:
-        logger.info(
+        log.info(
             "POST /extract staged ip=%s mode=template staged_ok=%d staged_bad=%d",
             _client_ip(),
             n_staged_ok,
@@ -584,7 +594,7 @@ def extract():
                     progress=lambda ev: q.put(("p", ev)),
                 )
             except Exception as e:
-                logger.exception("POST /extract ndjson worker failed ip=%s", _client_ip())
+                log.exception("POST /extract ndjson worker failed ip=%s", _client_ip())
                 holder["err"] = e
             finally:
                 q.put(("done", None))
@@ -610,12 +620,12 @@ def extract():
                 return
             pl = holder.get("payload")
             if pl is None:
-                logger.warning("POST /extract ndjson no payload after worker ip=%s", _client_ip())
+                log.warning("POST /extract ndjson no payload after worker ip=%s", _client_ip())
                 yield (
                     json.dumps({"type": "error", "message": "No extraction result"}, ensure_ascii=False) + "\n"
                 ).encode("utf-8")
                 return
-            logger.info(
+            log.info(
                 "POST /extract ndjson done ip=%s rows=%d errors=%d file_results=%d",
                 _client_ip(),
                 len(pl.get("rows") or []),
@@ -644,7 +654,7 @@ def extract():
         llm_stream=llm_stream,
         progress=None,
     )
-    logger.info(
+    log.info(
         "POST /extract done ip=%s mode=%s rows=%d errors=%d file_results=%d",
         _client_ip(),
         mode,
