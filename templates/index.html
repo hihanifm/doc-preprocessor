@@ -433,14 +433,15 @@
         <label class="mode-opt"><input type="radio" name="extract-mode" value="llm" /> LLM (OpenAI-compatible)</label>
       </div>
       <div id="llm-settings">
-        <p class="hint">Endpoint and credentials are sent only with this request — not stored on the server. Use HTTPS if not on localhost.</p>
+        <p class="hint">Endpoint and credentials are sent only with this request — not stored on the server. Use HTTPS if not on localhost. If the app runs in <strong>Docker</strong> and Ollama is on your computer, set base URL to <code>http://host.docker.internal:11434/v1</code> (not <code>127.0.0.1</code> — that points at the container).</p>
         <datalist id="llm-model-suggestions"></datalist>
         <div class="llm-field-row">
-          <label>Base URL <input type="url" id="llm-base-url" placeholder="https://api.openai.com/v1" autocomplete="off" /></label>
+          <label>Base URL <input type="url" id="llm-base-url" placeholder="https://api.openai.com/v1 or http://host.docker.internal:11434/v1" autocomplete="off" /></label>
           <label>API key <input type="password" id="llm-api-key" placeholder="sk-… or ollama" autocomplete="off" /></label>
-          <label>Model <input type="text" id="llm-model" list="llm-model-suggestions" placeholder="gpt-4o-mini" autocomplete="off" /></label>
+          <label>Model <input type="text" id="llm-model" list="llm-model-suggestions" placeholder="gpt-4o-mini — use Fetch models to list" autocomplete="off" /></label>
           <button type="button" class="btn btn--muted btn--sm" id="llm-fetch-models">Fetch models</button>
-          <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-preset">Use Ollama defaults</button>
+          <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-preset" title="Ollama on the same machine as the browser (Flask not in Docker)">Ollama · localhost</button>
+          <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-docker-preset" title="Ollama on the host when Flask runs in Docker (Docker Desktop)">Ollama · Docker host</button>
         </div>
         <p id="llm-models-hint" class="hint" aria-live="polite"></p>
       </div>
@@ -648,7 +649,10 @@
       const btn = document.getElementById('llm-fetch-models');
       const base = document.getElementById('llm-base-url').value.trim();
       if (!base) {
-        setLlmModelsHint('Enter a base URL first (e.g. https://api.openai.com/v1).', 'err');
+        setLlmModelsHint(
+          'Enter a base URL first (OpenAI: …/v1; Ollama in Docker: http://host.docker.internal:11434/v1).',
+          'err'
+        );
         return;
       }
       btn.disabled = true;
@@ -679,13 +683,19 @@
       }
     });
 
-    document.getElementById('llm-ollama-preset').addEventListener('click', () => {
+    function applyOllamaPreset(baseUrl) {
       document.querySelector('input[name="extract-mode"][value="llm"]').checked = true;
       syncExtractModeUi();
-      document.getElementById('llm-base-url').value = 'http://127.0.0.1:11434/v1';
+      document.getElementById('llm-base-url').value = baseUrl;
       document.getElementById('llm-api-key').value = 'ollama';
       document.getElementById('llm-model').value = 'llama3.2';
       setLlmModelsHint('');
+    }
+    document.getElementById('llm-ollama-preset').addEventListener('click', () => {
+      applyOllamaPreset('http://127.0.0.1:11434/v1');
+    });
+    document.getElementById('llm-ollama-docker-preset').addEventListener('click', () => {
+      applyOllamaPreset('http://host.docker.internal:11434/v1');
     });
 
     function clearExtractSummary() {

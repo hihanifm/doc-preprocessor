@@ -247,5 +247,8 @@ def fetch_model_ids(base_url: str, api_key: str, timeout: float = LIST_MODELS_TI
 
     raise LlmExtractError(
         "Could not list models. For OpenAI-compatible APIs use a base URL ending in /v1. "
-        "For Ollama, use e.g. http://127.0.0.1:11434/v1 and ensure `ollama serve` is running."
+        "For Ollama on the same machine as the app, use http://127.0.0.1:11434/v1. "
+        "If this server runs inside Docker and Ollama is on the host, use "
+        "http://host.docker.internal:11434/v1 instead (127.0.0.1 inside the container is not the host). "
+        "Ensure `ollama serve` is running and reachable from the container."
     )

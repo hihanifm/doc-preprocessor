@@ -36,7 +36,7 @@ On the **Test case extractor** tab you can choose **LLM (OpenAI-compatible)** in
 
 - **Per request only:** base URL, API key, and model are sent with `POST /extract` as form fields; listing models uses `POST /llm-models` with JSON. They are **not** written to `.env`, disk, or logs (do not enable logging of raw multipart bodies in production).
 - **HTTPS:** if the app is not on `localhost`, use HTTPS so the key is not sent in clear text.
-- **Ollama:** click **Use Ollama defaults** (or set URL `http://127.0.0.1:11434/v1`, API key `ollama`, and your local model name). The Flask server must be able to reach that host (e.g. same machine).
+- **Ollama:** use **Ollama · localhost** when Flask runs on your machine (`http://127.0.0.1:11434/v1`), or **Ollama · Docker host** when the app runs in Docker and Ollama is on the host (`http://host.docker.internal:11434/v1`). API key `ollama`, then pick a model (optional **Fetch models**). Linux Docker may need `--add-host=host.docker.internal:host-gateway` if `host.docker.internal` is missing.
 - Output rows match [`exporter.py`](exporter.py) columns (including **`steps_expected`**). Implementation: [`llm_extractor.py`](llm_extractor.py).
 
 ## Installing dependencies
