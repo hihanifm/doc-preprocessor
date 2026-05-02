@@ -4,6 +4,9 @@ Batch extraction via Docs Garage HTTP API: one .docx/.pdf per request → one .x
 
 Run on the same host as Flask (e.g. SSH to lab, BASE_URL=http://127.0.0.1:5000).
 
+LLM mode defaults to NDJSON progress from /extract (section-by-section lines on stderr, like the UI).
+Use --no-llm-progress-stream for one-shot JSON only.
+
 Requires the Flask app to be running. Uses stdlib only (no requests dependency).
 """
 
@@ -79,6 +82,117 @@ def _runtime_http(msg: str, code: int | None) -> RuntimeError:
     ex = RuntimeError(msg)
     setattr(ex, "http_status", code)
     return ex
+
+
+def _format_ndjson_progress_line(data: dict[str, Any]) -> str | None:
+    """Human-readable line for NDJSON progress events (similar idea to the web UI)."""
+    step = data.get("step") or ""
+    file_hint = data.get("file") or ""
+    if step == "file_begin":
+        return (
+            f"file {data.get('index')}/{data.get('total_files')} "
+            f"{file_hint[:60]}{'…' if len(str(file_hint)) > 60 else ''}"
+        )
+    if step == "sections_plan":
+        ss = data.get("section_split") or ""
+        n = data.get("total_sections")
+        return f"{n} section(s) · split={ss}"
+    if step == "section_start":
+        title = (data.get("title") or "")[:100]
+        return f"section {data.get('index')}/{data.get('total')}: {title}"
+    if step == "section_done":
+        return (
+            f"section done +{data.get('rows_in_section', 0)} rows "
+            f"(cumulative {data.get('cumulative_rows', 0)})"
+        )
+    if step == "section_failed":
+        title = (data.get("title") or "")[:80]
+        err = (data.get("error") or "")[:120]
+        return f"section failed (continuing): {title} — {err}"
+    if step == "whole_llm":
+        if data.get("phase") == "request":
+            return "whole-document LLM request…"
+        if data.get("phase") == "done":
+            return f"whole-document done · {data.get('rows_found', 0)} row(s)"
+    return None
+
+
+def _parse_ndjson_extract_response(resp) -> dict[str, Any]:
+    """Read application/x-ndjson body from /extract; print progress to stderr."""
+    last: dict[str, Any] | None = None
+    buf = b""
+    while True:
+        chunk = resp.read(8192)
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            t = line.strip()
+            if not t:
+                continue
+            o = json.loads(t.decode("utf-8", errors="replace"))
+            typ = o.get("type")
+            if typ == "progress":
+                payload = o.get("data") or {}
+                msg = _format_ndjson_progress_line(payload)
+                if msg:
+                    print(f"  llm: {msg}", file=sys.stderr, flush=True)
+            elif typ == "result":
+                last = o
+            elif typ == "error":
+                raise RuntimeError(o.get("message") or "Extract failed")
+            else:
+                pass
+
+    tail = buf.strip()
+    if tail:
+        o = json.loads(tail.decode("utf-8", errors="replace"))
+        typ = o.get("type")
+        if typ == "result":
+            last = o
+        elif typ == "error":
+            raise RuntimeError(o.get("message") or "Extract failed")
+
+    if not last or last.get("type") != "result":
+        raise RuntimeError("Incomplete extraction stream (no final result)")
+
+    return {
+        "rows": last.get("rows") or [],
+        "errors": last.get("errors") or [],
+        "template": last.get("template"),
+        "file_results": last.get("file_results") or [],
+    }
+
+
+def post_ndjson_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
+    """POST /extract expecting NDJSON progress + final result (LLM with llm_progress_stream on)."""
+    rel = "/extract"
+    url = urljoin(base_url.rstrip("/") + "/", rel.lstrip("/"))
+    file_bytes = path.read_bytes()
+    ctype, body = encode_multipart(
+        form,
+        "files",
+        path.name,
+        file_bytes,
+        _guess_mime(path),
+    )
+    req = Request(url, data=body, method="POST", headers={"Content-Type": ctype})
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            if resp.headers.get("X-Extract-Stream") != "1":
+                raw = resp.read().decode("utf-8", errors="replace")
+                return json.loads(raw)
+            return _parse_ndjson_extract_response(resp)
+    except HTTPError as e:
+        try:
+            payload = json.loads(e.read().decode("utf-8", errors="replace"))
+        except Exception:
+            payload = {}
+        msg = payload.get("error") if isinstance(payload, dict) else None
+        if not msg:
+            msg = e.reason or str(e.code)
+        raise _runtime_http(msg, e.code) from e
 
 
 def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
@@ -207,8 +321,24 @@ def build_extract_form(args: argparse.Namespace) -> dict[str, str]:
         form["llm_user_hints"] = args.llm_user_hints
         if args.llm_stream is not None:
             form["llm_stream"] = args.llm_stream
-        form["llm_progress_stream"] = "0"
+        # Default: omit llm_progress_stream → server uses "1" (NDJSON progress), same as UI.
+        if args.no_llm_progress_stream:
+            form["llm_progress_stream"] = "0"
     return form
+
+
+def post_extract_dispatch(
+    base_url: str,
+    path: Path,
+    form: dict[str, str],
+    timeout: float,
+    *,
+    llm_progress_stream: bool,
+) -> dict[str, Any]:
+    mode = (form.get("mode") or "template").strip().lower()
+    if mode == "llm" and llm_progress_stream:
+        return post_ndjson_extract(base_url, path, form, timeout)
+    return post_json_extract(base_url, path, form, timeout)
 
 
 def parse_env_defaults() -> dict[str, str]:
@@ -328,6 +458,12 @@ def main() -> int:
         default=None,
         help="Force LLM streaming off (0) or on (1). Default: server env / Auto.",
     )
+    parser.add_argument(
+        "--no-llm-progress-stream",
+        action="store_true",
+        help="Disable NDJSON progress from /extract (one JSON response; no section-by-section lines). "
+        "Default is progress stream for LLM mode (matches the web UI).",
+    )
 
     args = parser.parse_args()
 
@@ -367,6 +503,7 @@ def main() -> int:
         log_path = output_dir / "batch_extract_failures.log"
 
     form = build_extract_form(args)
+    llm_progress_stream = args.mode == "llm" and not args.no_llm_progress_stream
     files = discover_inputs(source, args.recursive)
     if not files:
         print(f"No .docx or .pdf files in {source}", file=sys.stderr)
@@ -391,7 +528,13 @@ def main() -> int:
         try:
 
             def do_extract() -> dict[str, Any]:
-                return post_json_extract(args.base_url, doc_path, form, args.timeout)
+                return post_extract_dispatch(
+                    args.base_url,
+                    doc_path,
+                    form,
+                    args.timeout,
+                    llm_progress_stream=llm_progress_stream,
+                )
 
             data = call_with_retry(
                 "extract",

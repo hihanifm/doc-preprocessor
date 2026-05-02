@@ -16,7 +16,7 @@ python scripts/folder_batch_extract.py \
 - Processes **one file per HTTP request** (each `.docx` / `.pdf` → one `.xlsx`).
 - **Non-recursive** by default; use `--recursive` for subfolders.
 - Writes **`Stem.xlsx`** next to each basename; use **`--disambiguate-ext`** if the same stem exists as both `.docx` and `.pdf` (`Stem_docx.xlsx`, `Stem_pdf.xlsx`).
-- **LLM mode** sends **`llm_progress_stream=0`** so the API returns a single JSON body (not NDJSON).
+- **LLM mode (default):** omits **`llm_progress_stream`** so the server uses **`1`** — same as the web UI: **NDJSON progress** (section starts/done, failures, row counts) prints to stderr as `llm: …` lines while the run completes. Use **`--no-llm-progress-stream`** for a single JSON response (no live section lines).
 
 ### Retries (transient errors)
 
