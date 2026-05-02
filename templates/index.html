@@ -393,12 +393,15 @@
     }
     #llm-settings input[type="text"],
     #llm-settings input[type="password"],
-    #llm-settings input[type="url"] {
+    #llm-settings input[type="url"],
+    #llm-settings select {
       min-width: 220px;
+      max-width: min(420px, 100%);
       padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid #cbd5e1;
       font-size: 0.85rem;
+      background: #fff;
     }
     #llm-settings .hint { margin: 0 0 8px; font-size: 0.78rem; }
     #llm-models-hint {
@@ -448,11 +451,10 @@
       </div>
       <div id="llm-settings">
         <p class="hint">Endpoint and credentials are sent only with this request — not stored on the server. Use HTTPS if not on localhost. If the app runs in <strong>Docker</strong> and Ollama is on your computer, set base URL to <code>http://host.docker.internal:11434/v1</code> (not <code>127.0.0.1</code> — that points at the container).</p>
-        <datalist id="llm-model-suggestions"></datalist>
         <div class="llm-field-row">
           <label>Base URL <input type="url" id="llm-base-url" placeholder="https://api.openai.com/v1 or http://host.docker.internal:11434/v1" autocomplete="off" /></label>
           <label>API key <input type="password" id="llm-api-key" placeholder="sk-… or ollama" autocomplete="off" /></label>
-          <label>Model <input type="text" id="llm-model" list="llm-model-suggestions" placeholder="gpt-4o-mini — use Fetch models to list" autocomplete="off" /></label>
+          <label>Model <select id="llm-model" aria-label="Model name"><option value="">— Click Fetch models —</option></select></label>
           <button type="button" class="btn btn--muted btn--sm" id="llm-fetch-models">Fetch models</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-preset" title="Ollama on the same machine as the browser (Flask not in Docker)">Ollama · localhost</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-docker-preset" title="Ollama on the host when Flask runs in Docker (Docker Desktop)">Ollama · Docker host</button>
@@ -641,7 +643,6 @@
     syncExtractModeUi();
 
     const llmModelsHint = document.getElementById('llm-models-hint');
-    const llmModelSuggestions = document.getElementById('llm-model-suggestions');
 
     function setLlmModelsHint(text, kind) {
       llmModelsHint.textContent = text || '';
@@ -650,13 +651,38 @@
       else if (kind === 'ok') llmModelsHint.classList.add('llm-models-hint--ok');
     }
 
-    function fillLlmModelSuggestions(ids) {
-      llmModelSuggestions.innerHTML = '';
+    function fillLlmModelSelect(ids) {
+      const sel = document.getElementById('llm-model');
+      const prev = sel.value;
+      sel.innerHTML = '';
+      const ph = document.createElement('option');
+      ph.value = '';
+      ph.textContent = ids.length
+        ? `— Choose model (${ids.length} loaded) —`
+        : '— No models returned —';
+      sel.appendChild(ph);
       ids.forEach(id => {
-        const opt = document.createElement('option');
-        opt.value = id;
-        llmModelSuggestions.appendChild(opt);
+        const o = document.createElement('option');
+        o.value = id;
+        o.textContent = id;
+        sel.appendChild(o);
       });
+      if (prev && [...sel.options].some(o => o.value === prev)) {
+        sel.value = prev;
+      }
+    }
+
+    function ensureLlmModelOption(modelId) {
+      const sel = document.getElementById('llm-model');
+      if ([...sel.options].some(o => o.value === modelId)) {
+        sel.value = modelId;
+        return;
+      }
+      const o = document.createElement('option');
+      o.value = modelId;
+      o.textContent = modelId;
+      sel.appendChild(o);
+      sel.value = modelId;
     }
 
     document.getElementById('llm-fetch-models').addEventListener('click', async () => {
@@ -683,10 +709,10 @@
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.error || 'Could not list models');
         const models = data.models || [];
-        fillLlmModelSuggestions(models);
+        fillLlmModelSelect(models);
         setLlmModelsHint(
           models.length
-            ? `${models.length} model(s) loaded — pick from suggestions or type a name.`
+            ? `${models.length} model(s) loaded — choose one in the Model dropdown.`
             : 'Server returned no models.',
           models.length ? 'ok' : ''
         );
@@ -702,7 +728,7 @@
       syncExtractModeUi();
       document.getElementById('llm-base-url').value = baseUrl;
       document.getElementById('llm-api-key').value = 'ollama';
-      document.getElementById('llm-model').value = 'llama3.2';
+      ensureLlmModelOption('llama3.2');
       setLlmModelsHint('');
     }
     document.getElementById('llm-ollama-preset').addEventListener('click', () => {
