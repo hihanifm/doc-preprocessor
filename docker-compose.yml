@@ -1,4 +1,4 @@
-# Port convention (BASE_PORT = 5000) — see refs/docker-lab-guidelines.md
+# Port convention (BASE_PORT = 5000), host.docker.internal — see refs/docker-lab-guidelines.md
 #   prod  →  5000   (single origin)
 #   dev   →  35050 host → 5000 in container (lab: avoid busy low ports)
 #
@@ -17,6 +17,9 @@ x-common: &common
     dockerfile: Dockerfile
     args:
       <<: *proxy-args
+  # Linux: resolve host.docker.internal to the host (matches Docker Desktop; needed for LLM proxy/Ollama on host).
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   # Optional — compose fails if env_file is missing unless required: false (Compose v2.24+).
   env_file:
     - path: .env
