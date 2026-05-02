@@ -391,6 +391,127 @@ def parse_env_defaults() -> dict[str, str]:
     return out
 
 
+_BULK_CONFIG_VERSION = 1
+# Same keys as argparse `dest` in main() plus `version` (metadata only).
+_BULK_CONFIG_ALLOWED_KEYS = frozenset(
+    {
+        "version",
+        "source",
+        "output",
+        "base_url",
+        "mode",
+        "recursive",
+        "disambiguate_ext",
+        "timeout",
+        "max_retries",
+        "no_retry",
+        "force",
+        "log_file",
+        "fail_fast",
+        "strict_exit",
+        "skip_empty_rows",
+        "llm_base_url",
+        "llm_api_key",
+        "llm_model",
+        "llm_document_scope",
+        "llm_heading_level",
+        "llm_section_split",
+        "llm_section_regex_hints",
+        "llm_user_hints",
+        "llm_stream",
+        "no_llm_progress_stream",
+    }
+)
+
+
+def _default_merged_dict(env: dict[str, str]) -> dict[str, Any]:
+    return {
+        "source": None,
+        "output": None,
+        "base_url": env.get("base_url", "http://127.0.0.1:35050"),
+        "mode": env.get("mode", "template"),
+        "recursive": False,
+        "disambiguate_ext": False,
+        "timeout": 720.0,
+        "max_retries": 10,
+        "no_retry": False,
+        "force": False,
+        "log_file": None,
+        "fail_fast": False,
+        "strict_exit": False,
+        "skip_empty_rows": False,
+        "llm_base_url": "",
+        "llm_api_key": "",
+        "llm_model": "",
+        "llm_document_scope": "sections",
+        "llm_heading_level": "auto",
+        "llm_section_split": "headings",
+        "llm_section_regex_hints": "",
+        "llm_user_hints": "",
+        "llm_stream": None,
+        "no_llm_progress_stream": False,
+    }
+
+
+def _load_bulk_config_file(path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"invalid JSON in {path}: {e}") from e
+    if not isinstance(raw, dict):
+        raise ValueError("config must be a JSON object")
+    extra = set(raw) - _BULK_CONFIG_ALLOWED_KEYS
+    if extra:
+        raise ValueError(f"unknown config keys: {sorted(extra)}")
+    if raw.get("version") != _BULK_CONFIG_VERSION:
+        raise ValueError(f"config version must be {_BULK_CONFIG_VERSION}")
+    return {k: v for k, v in raw.items() if k != "version"}
+
+
+def _coerce_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Normalize JSON values to the same types argparse would produce."""
+    out = dict(cfg)
+    if "source" in out and out["source"] is not None:
+        out["source"] = Path(out["source"])
+    if "output" in out and out["output"] is not None:
+        out["output"] = Path(out["output"])
+    if out.get("log_file") is not None:
+        out["log_file"] = Path(out["log_file"])
+    if "mode" in out and out["mode"] not in ("template", "llm"):
+        raise ValueError("mode must be template or llm")
+    if "llm_document_scope" in out and out["llm_document_scope"] not in ("whole", "sections"):
+        raise ValueError("llm_document_scope must be whole or sections")
+    if "llm_section_split" in out and out["llm_section_split"] not in ("headings", "patterns"):
+        raise ValueError("llm_section_split must be headings or patterns")
+    if "timeout" in out:
+        out["timeout"] = float(out["timeout"])
+    if "max_retries" in out:
+        out["max_retries"] = int(out["max_retries"])
+    for b in (
+        "recursive",
+        "disambiguate_ext",
+        "no_retry",
+        "force",
+        "fail_fast",
+        "strict_exit",
+        "skip_empty_rows",
+        "no_llm_progress_stream",
+    ):
+        if b in out and not isinstance(out[b], bool):
+            raise ValueError(f"{b} must be a JSON boolean")
+    if "llm_stream" in out and out["llm_stream"] is not None:
+        s = str(out["llm_stream"])
+        if s not in ("0", "1"):
+            raise ValueError("llm_stream must be '0' or '1'")
+        out["llm_stream"] = s
+    hl = out.get("llm_heading_level")
+    if hl is not None and hl != "auto" and str(hl) not in ("1", "2", "3", "4", "5", "6"):
+        raise ValueError("llm_heading_level must be auto or 1–6")
+    if hl is not None:
+        out["llm_heading_level"] = str(hl)
+    return out
+
+
 def _api_urls(base: str) -> tuple[str, str]:
     b = base.rstrip("/") + "/"
     return urljoin(b, "extract"), urljoin(b, "download")
@@ -470,116 +591,150 @@ def main() -> int:
         description="Extract each .docx/.pdf in a folder to its own .xlsx via Docs Garage /extract + /download.",
     )
     parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="JSON config (version + same keys as CLI). Explicit CLI flags override the file.",
+    )
+    parser.add_argument(
         "--source",
         type=Path,
-        required=True,
-        help="Directory containing input documents.",
+        default=argparse.SUPPRESS,
+        help="Directory containing input documents (required unless set in --config).",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        required=True,
-        help="Directory for generated .xlsx files (created if missing).",
+        default=argparse.SUPPRESS,
+        help="Directory for generated .xlsx files (required unless set in --config).",
     )
     parser.add_argument(
         "--base-url",
-        default=env.get("base_url", "http://127.0.0.1:35050"),
+        default=argparse.SUPPRESS,
         help="Docs Garage base URL (env: DOCS_GARAGE_URL). Default http://127.0.0.1:35050",
     )
     parser.add_argument(
         "--mode",
         choices=("template", "llm"),
-        default=env.get("mode", "template"),
+        default=argparse.SUPPRESS,
         help="Extraction mode (env: DOCS_GARAGE_MODE). Default template.",
     )
-    parser.add_argument("--recursive", action="store_true", help="Include .docx/.pdf in subfolders.")
+    parser.add_argument("--recursive", action="store_true", default=argparse.SUPPRESS, help="Include .docx/.pdf in subfolders.")
     parser.add_argument(
         "--disambiguate-ext",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Name outputs stem_docx.xlsx / stem_pdf.xlsx to avoid collisions.",
     )
     parser.add_argument(
         "--timeout",
         type=float,
-        default=720.0,
+        default=argparse.SUPPRESS,
         help="HTTP timeout per request in seconds (default 720).",
     )
     parser.add_argument(
         "--max-retries",
         type=int,
-        default=10,
+        default=argparse.SUPPRESS,
         help="Max attempts per HTTP call for transient errors (default 10).",
     )
     parser.add_argument(
         "--no-retry",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Disable retry/backoff (single attempt per request).",
     )
     parser.add_argument(
         "--force",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Re-extract even when the target .xlsx already exists (default: skip existing outputs).",
     )
     parser.add_argument(
         "--log-file",
         type=Path,
-        default=None,
+        default=argparse.SUPPRESS,
         help="Append one JSON line per failure (default: <output>/batch_extract_failures.log).",
     )
     parser.add_argument(
         "--fail-fast",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Stop on first failure.",
     )
     parser.add_argument(
         "--strict-exit",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Exit with code 1 if any failure was logged (see --log-file).",
     )
     parser.add_argument(
         "--skip-empty-rows",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Treat zero extracted rows as failure for logging and --strict-exit.",
     )
 
-    parser.add_argument("--llm-base-url", default="", help="OpenAI-compatible base URL.")
-    parser.add_argument("--llm-api-key", default="", help='API key (use "ollama" for Ollama).')
-    parser.add_argument("--llm-model", default="", help="Model id.")
+    parser.add_argument("--llm-base-url", default=argparse.SUPPRESS, help="OpenAI-compatible base URL.")
+    parser.add_argument("--llm-api-key", default=argparse.SUPPRESS, help='API key (use "ollama" for Ollama).')
+    parser.add_argument("--llm-model", default=argparse.SUPPRESS, help="Model id.")
     parser.add_argument(
         "--llm-document-scope",
         choices=("whole", "sections"),
-        default="sections",
+        default=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--llm-heading-level",
-        default="auto",
+        default=argparse.SUPPRESS,
         help="Heading depth for section split: auto or 1–6.",
     )
     parser.add_argument(
         "--llm-section-split",
         choices=("headings", "patterns"),
-        default="headings",
+        default=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--llm-section-regex-hints",
-        default="",
+        default=argparse.SUPPRESS,
         help="Regex hints file path or inline string (required for patterns split).",
     )
-    parser.add_argument("--llm-user-hints", default="", help="Optional short hints for the model.")
+    parser.add_argument("--llm-user-hints", default=argparse.SUPPRESS, help="Optional short hints for the model.")
     parser.add_argument(
         "--llm-stream",
         choices=("0", "1"),
-        default=None,
+        default=argparse.SUPPRESS,
         help="Force LLM streaming off (0) or on (1). Default: server env / Auto.",
     )
     parser.add_argument(
         "--no-llm-progress-stream",
         action="store_true",
+        default=argparse.SUPPRESS,
         help="Disable NDJSON progress from /extract (one JSON response; no section-by-section lines). "
         "Default is progress stream for LLM mode (matches the web UI).",
     )
 
-    args = parser.parse_args()
+    parsed = parser.parse_args()
+
+    merged: dict[str, Any] = _default_merged_dict(env)
+    if parsed.config is not None:
+        try:
+            merged.update(_coerce_config_values(_load_bulk_config_file(parsed.config)))
+        except ValueError as e:
+            print(f"folder_batch_extract: {e}", file=sys.stderr)
+            return 2
+    for k in vars(parsed):
+        if k == "config":
+            continue
+        merged[k] = getattr(parsed, k)
+
+    if merged.get("source") is None or merged.get("output") is None:
+        print(
+            "folder_batch_extract: source and output required (JSON config and/or --source/--output)",
+            file=sys.stderr,
+        )
+        return 2
+
+    args = argparse.Namespace(**merged)
 
     global _BULK_PREFIX, _HTTP_SESSION_ID
     _sid = uuid.uuid4().hex[:12]

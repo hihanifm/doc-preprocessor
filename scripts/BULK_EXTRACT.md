@@ -13,6 +13,16 @@ python scripts/folder_batch_extract.py \
   --mode template
 ```
 
+### JSON config (`--config`)
+
+Same parameters as the CLI: include **`"version": 1`**, **`source`** and **`output`** (unless you pass `--source` / `--output` on the command line instead). Any flag you set on the command line **overrides** the file.
+
+```bash
+python scripts/folder_batch_extract.py --config scripts/batch_config.example.json
+```
+
+Example file: [`scripts/batch_config.example.json`](batch_config.example.json) — edit paths before running.
+
 - On start, the script prints a **`[bulk]`** banner to **stderr** (resolved `POST` URLs, mode, retries, `NO_PROXY` hint if proxy env vars are set) so you can confirm the target server before work begins.
 - Processes **one file per HTTP request** (each `.docx` / `.pdf` → one `.xlsx`).
 - **Non-recursive** by default; use `--recursive` for subfolders.

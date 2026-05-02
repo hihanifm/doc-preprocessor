@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "source": "./in",
+  "output": "./out",
+  "base_url": "http://127.0.0.1:35050",
+  "mode": "template"
+}
