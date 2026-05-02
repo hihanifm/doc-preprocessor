@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 LIST_MODELS_TIMEOUT_SEC = 30
 
 from exporter import COLUMNS
-from llm_document_filter import prepare_text_for_llm
+from llm_document_filter import prepare_text_for_llm, section_body_suggests_test_cases
 
 log = logging.getLogger(__name__)
 
@@ -731,7 +731,22 @@ def extract_with_llm_by_sections(
             "llm_heading_level_used": target,
         }
 
-    work_items = [(t, b) for t, b in parts if b.strip()]
+    stripped = [(t, b) for t, b in parts if b.strip()]
+    skipped_non_test: list[str] = []
+    work_items: list[tuple[str, str]] = []
+    for title, body in stripped:
+        if section_body_suggests_test_cases(body):
+            work_items.append((title, body))
+        else:
+            skipped_non_test.append(title)
+
+    if skipped_non_test:
+        log.info(
+            "LLM section mode: skipped %d chunk(s) with no test-like signals for %r (titles=%s)",
+            len(skipped_non_test),
+            file_name,
+            [t[:100] + ("…" if len(t) > 100 else "") for t in skipped_non_test[:15]],
+        )
 
     if progress:
         progress(
@@ -740,6 +755,7 @@ def extract_with_llm_by_sections(
                 "file": file_name,
                 "total_sections": len(work_items),
                 "section_split": ss,
+                "sections_skipped_non_test": len(skipped_non_test),
             }
         )
 
@@ -787,6 +803,8 @@ def extract_with_llm_by_sections(
             )
     agg_meta["truncated"] = any_trunc
     agg_meta["llm_section_calls"] = n_calls
+    if skipped_non_test:
+        agg_meta["llm_section_skipped_non_test"] = skipped_non_test
     return all_rows, agg_meta
 
 
@@ -813,7 +831,7 @@ def extract_with_llm(
     Streaming: if stream is None, whole-file extraction follows LLM_STREAM (default on); section mode follows
     LLM_STREAM_SECTIONS (default off). Pass True/False to force.
 
-    Boilerplate sections (TOC, introduction, revision history, etc.) are dropped when they appear
+    Boilerplate sections (TOC, introduction, appendix, revision history, etc.) are dropped when they appear
     as markdown heading lines — see llm_document_filter.prepare_text_for_llm.
 
     Chat calls are throttled process-wide: LLM_RPM (default 3) per rolling minute — see _rate_limit_llm_chat.

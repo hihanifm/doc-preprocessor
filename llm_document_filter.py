@@ -58,12 +58,73 @@ def _is_boilerplate_heading(norm: str) -> bool:
     if re.search(r"\b(revision|change|version)\s+history\b", norm):
         return True
 
+    # Appendix blocks (same treatment as introduction): heading-only titles and "Appendix A" style.
+    if norm in ("appendix", "appendices"):
+        return True
+    if re.fullmatch(r"appendix(\s+[a-z0-9]{1,8})?", norm):
+        return True
+    if re.match(r"^appendix(\s+[a-z0-9]{1,8})?\s*:", norm):
+        return True
+
+    return False
+
+
+def _raw_heading_is_appendix_section(title: str) -> bool:
+    """
+    Appendix titles whose inner topic is stripped by _normalize_heading_title (e.g. 'Appendix A: Glossary')
+    must be detected on the raw heading text; normalized form would be just 'glossary'.
+    """
+    t = title.strip()
+    if re.match(r"(?i)^appendix(\s+[a-z0-9]{1,8})?\s*:", t):
+        return True
+    return False
+
+
+_TEST_CASE_BODY_SIGNAL = re.compile(
+    r"(?i)\b("
+    r"expected\s+(?:results?|behaviors?|outcomes?)|"
+    r"procedure|precondition|test\s+cases?|"
+    r"verification|actual\s+result|"
+    r"test\s+(?:objective|description|steps?)|"
+    r"given\s+when\s+then"
+    r")\b"
+)
+_STEP_LINE = re.compile(r"(?m)^\s*(?:\d+|[a-z])[\.)]\s+\S")
+_LABEL_LINE = re.compile(r"(?mi)^(expected|steps?|procedure|action|result)s?\s*:")
+_TC_ID = re.compile(r"(?i)\bTC[-_]\d")
+
+
+def section_body_suggests_test_cases(body: str) -> bool:
+    """
+    Heuristic: section chunk looks like test-case material (steps, expected outcome, tables).
+
+    Used in LLM section mode to skip preamble / narrative blocks and avoid useless API calls.
+    """
+    s = body.strip()
+    if not s:
+        return False
+
+    if _TEST_CASE_BODY_SIGNAL.search(s):
+        return True
+    if re.search(r"(?i)\bsteps?\s*[:\d]", s):
+        return True
+    if _STEP_LINE.search(s):
+        return True
+    if _LABEL_LINE.search(s):
+        return True
+    if _TC_ID.search(s):
+        return True
+
+    pipe_lines = sum(1 for line in s.split("\n") if "|" in line)
+    if pipe_lines >= 2 and "\n" in s:
+        return True
+
     return False
 
 
 def strip_boilerplate_heading_sections(text: str) -> tuple[str, dict[str, Any]]:
     """
-    Remove markdown-heading sections that look like TOC / intro / revision blocks.
+    Remove markdown-heading sections that look like TOC / intro / appendix / revision blocks.
 
     Returns (cleaned_text, detail) where detail includes removed titles and lengths.
     """
@@ -87,7 +148,7 @@ def strip_boilerplate_heading_sections(text: str) -> tuple[str, dict[str, Any]]:
                 continue
 
             norm = _normalize_heading_title(title)
-            if _is_boilerplate_heading(norm):
+            if _is_boilerplate_heading(norm) or _raw_heading_is_appendix_section(title):
                 removed.append(title)
                 skip_level = level
                 i += 1
