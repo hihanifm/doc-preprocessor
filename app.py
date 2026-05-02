@@ -123,7 +123,6 @@ def _extract_core(
     llm_section_regex_hints: str,
     llm_user_hints: str,
     llm_stream: bool | None,
-    llm_max_calls: int | None,
     progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     all_rows: list = []
@@ -210,7 +209,6 @@ def _extract_core(
                     section_regex_hints=llm_section_regex_hints,
                     user_hints=llm_user_hints,
                     stream=llm_stream,
-                    max_llm_calls=llm_max_calls,
                     progress=progress,
                 )
                 all_rows.extend(rows)
@@ -237,8 +235,8 @@ def _extract_core(
                         fr_ok["llm_prep_removed_headings"] = llm_doc_meta.get("llm_prep_removed_headings")
                     if llm_doc_meta.get("llm_prep_fallback_original"):
                         fr_ok["llm_prep_fallback_original"] = True
-                    if llm_doc_meta.get("llm_max_calls_allowed") is not None:
-                        fr_ok["llm_max_calls_allowed"] = llm_doc_meta.get("llm_max_calls_allowed")
+                    if "llm_rpm" in llm_doc_meta:
+                        fr_ok["llm_rpm"] = llm_doc_meta.get("llm_rpm")
                 file_results.append(fr_ok)
                 continue
 
@@ -445,7 +443,6 @@ def extract():
     llm_section_regex_hints = ""
     llm_user_hints = ""
     llm_stream: bool | None = None
-    llm_max_calls: int | None = None
     if mode == "llm":
         llm_base_url = request.form.get("llm_base_url", "").strip()
         llm_api_key = request.form.get("llm_api_key", "").strip()
@@ -482,14 +479,6 @@ def extract():
         elif raw_llm_stream in ("0", "false", "no", "off"):
             llm_stream = False
         # empty / auto → None (server picks by scope: whole uses LLM_STREAM; sections use LLM_STREAM_SECTIONS)
-        raw_mc = (request.form.get("llm_max_calls") or "").strip()
-        if raw_mc:
-            try:
-                llm_max_calls = int(raw_mc)
-            except ValueError:
-                return jsonify({"error": "llm_max_calls must be an integer."}), 400
-            if llm_max_calls < 0 or llm_max_calls > 100_000:
-                return jsonify({"error": "llm_max_calls must be between 0 and 100000 (0 = no limit)."}), 400
 
     raw_prog = (request.form.get("llm_progress_stream") or "1").strip().lower()
     want_stream = mode == "llm" and raw_prog not in ("0", "false", "no", "off")
@@ -514,7 +503,6 @@ def extract():
                     llm_section_regex_hints=llm_section_regex_hints,
                     llm_user_hints=llm_user_hints,
                     llm_stream=llm_stream,
-                    llm_max_calls=llm_max_calls,
                     progress=lambda ev: q.put(("p", ev)),
                 )
             except Exception as e:
@@ -568,7 +556,6 @@ def extract():
             llm_section_regex_hints=llm_section_regex_hints,
             llm_user_hints=llm_user_hints,
             llm_stream=llm_stream,
-            llm_max_calls=llm_max_calls,
             progress=None,
         )
     )

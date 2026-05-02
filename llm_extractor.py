@@ -12,6 +12,8 @@ import logging
 import os
 import re
 import threading
+import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
@@ -352,28 +354,65 @@ def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
     return _default_stream_enabled()
 
 
-_MAX_LLM_CALLS_CEILING = 100_000
+_LLM_RPM_WINDOW_SEC = 60.0
 
 
-def _env_default_max_llm_calls() -> int:
-    """LLM_MAX_CALLS env; default 3. Non-positive values mean effectively unlimited."""
-    raw = (os.environ.get("LLM_MAX_CALLS") or "3").strip()
+def _env_llm_rpm() -> int:
+    """
+    Max chat/completions calls per rolling minute (process-wide).
+    LLM_RPM (preferred); falls back to legacy LLM_MAX_CALLS. Default 3.
+    Zero or negative = no limit.
+    """
+    raw = (os.environ.get("LLM_RPM") or os.environ.get("LLM_MAX_CALLS") or "3").strip()
     try:
-        n = int(raw)
+        return int(raw)
     except ValueError:
         return 3
-    if n <= 0:
-        return _MAX_LLM_CALLS_CEILING
-    return min(max(1, n), _MAX_LLM_CALLS_CEILING)
 
 
-def _resolve_max_llm_calls(explicit: int | None) -> int:
-    """Per-file cap on chat completions in section mode. explicit None → env default."""
-    if explicit is not None:
-        if explicit <= 0:
-            return _MAX_LLM_CALLS_CEILING
-        return min(explicit, _MAX_LLM_CALLS_CEILING)
-    return _env_default_max_llm_calls()
+class LlmChatRateLimiter:
+    """Sliding window: at most max_calls events per window_sec (wall-clock via monotonic deltas)."""
+
+    __slots__ = ("max_calls", "window_sec", "_lock", "_times")
+
+    def __init__(self, max_calls: int, window_sec: float) -> None:
+        self.max_calls = max_calls
+        self.window_sec = window_sec
+        self._lock = threading.Lock()
+        self._times: deque[float] = deque()
+
+    def acquire(self) -> None:
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._times and now - self._times[0] >= self.window_sec:
+                    self._times.popleft()
+                if len(self._times) < self.max_calls:
+                    self._times.append(time.monotonic())
+                    return
+                wait = self.window_sec - (now - self._times[0]) + 0.02
+            w = max(min(wait, 120.0), 0.05)
+            log.debug("LLM rate limit: sleeping %.2fs (max %d per %.0fs)", w, self.max_calls, self.window_sec)
+            time.sleep(w)
+
+
+_llm_rpm_limiter: LlmChatRateLimiter | None = None
+_llm_rpm_limiter_for_rpm: int | None = None
+_llm_rpm_limiter_global_lock = threading.Lock()
+
+
+def _rate_limit_llm_chat() -> None:
+    """Wait if needed so chat/completions calls stay under LLM_RPM per minute (global)."""
+    rpm = _env_llm_rpm()
+    if rpm <= 0:
+        return
+    global _llm_rpm_limiter, _llm_rpm_limiter_for_rpm
+    with _llm_rpm_limiter_global_lock:
+        if _llm_rpm_limiter is None or _llm_rpm_limiter_for_rpm != rpm:
+            _llm_rpm_limiter = LlmChatRateLimiter(rpm, _LLM_RPM_WINDOW_SEC)
+            _llm_rpm_limiter_for_rpm = rpm
+        lim = _llm_rpm_limiter
+    lim.acquire()
 
 
 def detect_shallowest_heading_level(text: str) -> int | None:
@@ -549,6 +588,7 @@ def _extract_with_llm_single_pass(
     )
 
     try:
+        _rate_limit_llm_chat()
         if progress and section_title is None:
             progress(
                 {
@@ -638,7 +678,6 @@ def extract_with_llm_by_sections(
     section_regex_hints: str = "",
     user_hints: str = "",
     progress: Callable[[dict[str, Any]], None] | None = None,
-    max_llm_calls: int = 3,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Split doc_text on headings or regex line patterns; merge rows from one LLM call per section."""
     use_stream = _resolve_stream("sections", stream)
@@ -701,12 +740,6 @@ def extract_with_llm_by_sections(
         }
 
     work_items = [(t, b) for t, b in parts if b.strip()]
-    if len(work_items) > max_llm_calls:
-        raise LlmExtractError(
-            f"This document splits into {len(work_items)} section(s), each needing one LLM request, "
-            f"but the maximum allowed is {max_llm_calls}. Try whole-file mode, a coarser heading level "
-            f"or regex, or raise Max LLM requests / LLM_MAX_CALLS (admin)."
-        )
 
     if progress:
         progress(
@@ -780,7 +813,6 @@ def extract_with_llm(
     section_regex_hints: str = "",
     user_hints: str = "",
     progress: Callable[[dict[str, Any]], None] | None = None,
-    max_llm_calls: int | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     Call OpenAI-compatible chat/completions. Set document_scope=\"sections\" to split on markdown headings
@@ -792,7 +824,7 @@ def extract_with_llm(
     Boilerplate sections (TOC, introduction, revision history, etc.) are dropped when they appear
     as markdown heading lines — see llm_document_filter.prepare_text_for_llm.
 
-    max_llm_calls: cap on section-mode requests per file (default from LLM_MAX_CALLS env, usually 3).
+    Chat calls are throttled process-wide: LLM_RPM (default 3) per rolling minute — see _rate_limit_llm_chat.
     """
     doc_text, prep_meta = prepare_text_for_llm(doc_text)
     if prep_meta.get("llm_prep_stripped"):
@@ -805,8 +837,7 @@ def extract_with_llm(
     uh = (user_hints or "").strip()
     ds = (document_scope or "whole").strip().lower()
     use_stream = _resolve_stream(document_scope, stream)
-    cap = _resolve_max_llm_calls(max_llm_calls)
-    prep_meta["llm_max_calls_allowed"] = cap
+    prep_meta["llm_rpm"] = _env_llm_rpm()
 
     if ds == "sections":
         rows, meta = extract_with_llm_by_sections(
@@ -822,7 +853,6 @@ def extract_with_llm(
             section_regex_hints=section_regex_hints,
             user_hints=uh,
             progress=progress,
-            max_llm_calls=cap,
         )
         meta.update(prep_meta)
         return rows, meta
