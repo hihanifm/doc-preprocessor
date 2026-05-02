@@ -93,6 +93,19 @@ _STEP_LINE = re.compile(r"(?m)^\s*(?:\d+|[a-z])[\.)]\s+\S")
 _LABEL_LINE = re.compile(r"(?mi)^(expected|steps?|procedure|action|result)s?\s*:")
 _TC_ID = re.compile(r"(?i)\bTC[-_]\d")
 
+# VZ test case IDs: VZ_TC_ + middle + _ + trailing digits.
+# Biased toward recall (catch likely IDs for Excel review / cleanup); extra false positives are OK.
+# Case-insensitive prefix; middle allows alnum, underscore, hyphen, dot; boundaries avoid glued junk.
+_VZ_TC_ID_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])VZ_TC_[A-Za-z0-9_.-]+_\d+(?![A-Za-z0-9])"
+)
+
+
+def extract_vz_tc_id(text: str) -> str | None:
+    """Return the first VZ_TC_* ID in text, or None (liberal match — prefer not missing real IDs)."""
+    m = _VZ_TC_ID_RE.search((text or "").strip())
+    return m.group(0) if m else None
+
 
 def section_body_suggests_test_cases(body: str) -> bool:
     """

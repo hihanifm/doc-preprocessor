@@ -237,6 +237,10 @@ def _extract_core(
                         fr_ok["llm_prep_fallback_original"] = True
                     if "llm_rpm" in llm_doc_meta:
                         fr_ok["llm_rpm"] = llm_doc_meta.get("llm_rpm")
+                    if llm_doc_meta.get("llm_section_empty_vz_tc_placeholder_count"):
+                        fr_ok["llm_section_empty_vz_tc_placeholder_count"] = llm_doc_meta.get(
+                            "llm_section_empty_vz_tc_placeholder_count"
+                        )
                 file_results.append(fr_ok)
                 continue
 

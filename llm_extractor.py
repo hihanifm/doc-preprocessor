@@ -23,7 +23,11 @@ from urllib.request import Request, urlopen
 LIST_MODELS_TIMEOUT_SEC = 30
 
 from exporter import COLUMNS
-from llm_document_filter import prepare_text_for_llm, section_body_suggests_test_cases
+from llm_document_filter import (
+    extract_vz_tc_id,
+    prepare_text_for_llm,
+    section_body_suggests_test_cases,
+)
 
 log = logging.getLogger(__name__)
 
@@ -191,6 +195,24 @@ def _strip_json_fence(content: str) -> str:
     if lines and lines[-1].strip() == "```":
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+def _empty_vz_tc_placeholder_row(
+    file_name: str, section_title: str, test_id: str
+) -> dict[str, str]:
+    """Excel-only row for empty sections whose title carries a VZ_TC_* id (no LLM call)."""
+    title = (section_title or "").strip()
+    return {
+        "file_name": file_name,
+        "test_id": test_id,
+        "test_name": title,
+        "description": (
+            "Empty section (no body text under this heading). Not sent to the LLM — review manually."
+        ),
+        "preconditions": "",
+        "procedure_steps": "",
+        "expected_results": "",
+    }
 
 
 def _coerce_str(v: Any) -> str:
@@ -671,7 +693,12 @@ def extract_with_llm_by_sections(
     user_hints: str = "",
     progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
-    """Split doc_text on headings or regex line patterns; merge rows from one LLM call per section."""
+    """
+    Split doc_text on headings or regex line patterns; merge rows from one LLM call per section.
+
+    Empty body + section title contains a VZ_TC_* id (see extract_vz_tc_id) → one placeholder row,
+    no LLM call, in document order alongside LLM-extracted rows.
+    """
     use_stream = _resolve_stream("sections", stream)
     ss = (section_split or "headings").strip().lower()
     agg_meta: dict[str, Any]
@@ -731,14 +758,19 @@ def extract_with_llm_by_sections(
             "llm_heading_level_used": target,
         }
 
-    stripped = [(t, b) for t, b in parts if b.strip()]
-    skipped_non_test: list[str] = []
-    work_items: list[tuple[str, str]] = []
-    for title, body in stripped:
-        if section_body_suggests_test_cases(body):
-            work_items.append((title, body))
-        else:
-            skipped_non_test.append(title)
+    skipped_non_test: list[str] = [
+        t
+        for t, b in parts
+        if b.strip() and not section_body_suggests_test_cases(b)
+    ]
+    placeholder_titles: list[str] = [
+        t for t, b in parts if not b.strip() and extract_vz_tc_id(t)
+    ]
+    llm_section_count = sum(
+        1
+        for t, b in parts
+        if b.strip() and section_body_suggests_test_cases(b)
+    )
 
     if skipped_non_test:
         log.info(
@@ -748,23 +780,40 @@ def extract_with_llm_by_sections(
             [t[:100] + ("…" if len(t) > 100 else "") for t in skipped_non_test[:15]],
         )
 
-    if progress:
-        progress(
-            {
-                "step": "sections_plan",
-                "file": file_name,
-                "total_sections": len(work_items),
-                "section_split": ss,
-                "sections_skipped_non_test": len(skipped_non_test),
-            }
+    if placeholder_titles:
+        log.info(
+            "LLM section mode: %d empty-section placeholder row(s) for VZ_TC_* id(s) in %r (titles=%s)",
+            len(placeholder_titles),
+            file_name,
+            [t[:100] + ("…" if len(t) > 100 else "") for t in placeholder_titles[:15]],
         )
+
+    if progress:
+        plan: dict[str, Any] = {
+            "step": "sections_plan",
+            "file": file_name,
+            "total_sections": llm_section_count,
+            "section_split": ss,
+            "sections_skipped_non_test": len(skipped_non_test),
+        }
+        if placeholder_titles:
+            plan["sections_empty_vz_tc_placeholders"] = len(placeholder_titles)
+        progress(plan)
 
     all_rows: list[dict[str, str]] = []
     any_trunc = False
     n_calls = 0
     uh = (user_hints or "").strip()
-    total_w = len(work_items)
-    for title, body in work_items:
+    total_w = llm_section_count
+
+    for title, body in parts:
+        if not body.strip():
+            vid = extract_vz_tc_id(title)
+            if vid:
+                all_rows.append(_empty_vz_tc_placeholder_row(file_name, title, vid))
+            continue
+        if not section_body_suggests_test_cases(body):
+            continue
         n_calls += 1
         title_disp = title if len(title) <= 480 else title[:477] + "…"
         if progress:
@@ -805,6 +854,9 @@ def extract_with_llm_by_sections(
     agg_meta["llm_section_calls"] = n_calls
     if skipped_non_test:
         agg_meta["llm_section_skipped_non_test"] = skipped_non_test
+    if placeholder_titles:
+        agg_meta["llm_section_empty_vz_tc_placeholders"] = placeholder_titles
+        agg_meta["llm_section_empty_vz_tc_placeholder_count"] = len(placeholder_titles)
     return all_rows, agg_meta
 
 
@@ -833,6 +885,9 @@ def extract_with_llm(
 
     Boilerplate sections (TOC, introduction, appendix, revision history, etc.) are dropped when they appear
     as markdown heading lines — see llm_document_filter.prepare_text_for_llm.
+
+    In section mode, a section with an empty body but a VZ_TC_* id in the title yields a placeholder Excel row
+    (no LLM call); see extract_vz_tc_id in llm_document_filter.
 
     Chat calls are throttled process-wide: LLM_RPM (default 3) per rolling minute — see _rate_limit_llm_chat.
     """

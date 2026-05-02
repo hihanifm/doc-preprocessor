@@ -913,6 +913,10 @@
                   ? `headings at depth ${esc(String(fr.llm_heading_level_used))}`
                   : 'sections';
             secHint = `<span class="extract-summary-row--trunc" style="color:#0369a1;">Section mode (${via}): ${esc(String(fr.llm_section_calls))} model request(s).</span>`;
+            if (fr.llm_section_empty_vz_tc_placeholder_count > 0) {
+              secHint +=
+                ` <span class="extract-summary-row--trunc" style="color:#7c3aed;">${esc(String(fr.llm_section_empty_vz_tc_placeholder_count))} empty VZ_TC section(s) → Excel placeholder row(s) (no LLM).</span>`;
+            }
           }
           let prepHint = '';
           if (fr.llm_prep_removed_headings && fr.llm_prep_removed_headings.length) {
