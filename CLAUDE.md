@@ -42,6 +42,7 @@ On the **Test case extractor** tab you can choose **LLM (OpenAI-compatible)** in
 - **Ollama:** use **Ollama · localhost** when Flask runs on your machine (`http://127.0.0.1:11434/v1`), or **Ollama · Docker host** when the app runs in Docker and Ollama is on the host (`http://host.docker.internal:11434/v1`). API key `ollama`, then pick a model (optional **Fetch models**). Linux Docker may need `--add-host=host.docker.internal:host-gateway` if `host.docker.internal` is missing.
 - **Streaming:** `chat/completions` uses **SSE streaming** by default (`stream: true`); if the body is empty or a provider ignores streaming, the server falls back to a non-streaming completion. Set **`LLM_STREAM=0`** in `.env` to force one-shot requests only.
 - **Debug file:** set **`LLM_IO_LOG_PATH`** (e.g. `llm_io.log`) to append structured request/response records for **extract** calls only (not `/llm-models`). API keys are not written verbatim (`Bearer <redacted>`).
+- **Section mode:** form fields **`llm_document_scope`** (`whole` \| `sections`) and **`llm_heading_level`** (`auto` \| `1`–`6`). Splits normalized text on markdown heading lines (`#` … `######`) at the chosen depth; **Auto** uses the shallowest heading level present. Word heading styles map to `#`; PDFs usually lack these lines — use whole file.
 - Output rows match [`exporter.py`](exporter.py) columns (including **`steps_expected`**). Implementation: [`llm_extractor.py`](llm_extractor.py).
 
 ## Installing dependencies

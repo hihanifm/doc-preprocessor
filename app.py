@@ -192,6 +192,8 @@ def extract():
     llm_base_url = ""
     llm_api_key = ""
     llm_model = ""
+    llm_document_scope = "whole"
+    llm_heading_level = "auto"
     if mode == "llm":
         llm_base_url = request.form.get("llm_base_url", "").strip()
         llm_api_key = request.form.get("llm_api_key", "").strip()
@@ -199,6 +201,12 @@ def extract():
         form_err = validate_llm_form(llm_base_url, llm_api_key, llm_model)
         if form_err:
             return jsonify({"error": form_err}), 400
+        llm_document_scope = (request.form.get("llm_document_scope") or "whole").strip().lower()
+        if llm_document_scope not in ("whole", "sections"):
+            return jsonify({"error": "llm_document_scope must be whole or sections."}), 400
+        llm_heading_level = (request.form.get("llm_heading_level") or "auto").strip().lower()
+        if llm_heading_level not in ("auto", "1", "2", "3", "4", "5", "6"):
+            return jsonify({"error": "llm_heading_level must be auto or 1–6."}), 400
 
     all_rows = []
     errors = []
@@ -253,21 +261,26 @@ def extract():
                         api_key=llm_api_key,
                         model=llm_model,
                         file_name=display_name,
+                        document_scope=llm_document_scope,
+                        heading_level=llm_heading_level,
                     )
                     all_rows.extend(rows)
                     if tpl_label not in templates_order:
                         templates_order.append(tpl_label)
-                    file_results.append(
-                        {
-                            "filename": display_name,
-                            "template": tpl_label,
-                            "rows": len(rows),
-                            "ok": True,
-                            "llm_truncated": bool(llm_doc_meta.get("truncated")),
-                            "llm_doc_chars": llm_doc_meta.get("doc_char_count"),
-                            "llm_max_doc_chars": llm_doc_meta.get("max_doc_chars"),
-                        }
-                    )
+                    fr_ok: dict = {
+                        "filename": display_name,
+                        "template": tpl_label,
+                        "rows": len(rows),
+                        "ok": True,
+                        "llm_truncated": bool(llm_doc_meta.get("truncated")),
+                        "llm_doc_chars": llm_doc_meta.get("doc_char_count"),
+                        "llm_max_doc_chars": llm_doc_meta.get("max_doc_chars"),
+                    }
+                    if llm_doc_meta.get("llm_section_mode"):
+                        fr_ok["llm_section_mode"] = True
+                        fr_ok["llm_section_calls"] = llm_doc_meta.get("llm_section_calls")
+                        fr_ok["llm_heading_level_used"] = llm_doc_meta.get("llm_heading_level_used")
+                    file_results.append(fr_ok)
                 except LlmExtractError as le:
                     logger.warning("POST /extract LLM failed file=%r model=%r: %s", display_name, llm_model, le)
                     errors.append(f"{display_name}: {le}")

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -31,6 +32,8 @@ REQUEST_TIMEOUT_SEC = 180
 
 _ROW_KEYS = [k for k, _ in COLUMNS]
 
+_HEADING_LINE_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
 _SYSTEM_PROMPT = """You extract software test cases from plain-text documents (Word/PDF-derived).
 Respond with ONLY valid JSON — no markdown fences, no commentary.
 
@@ -40,6 +43,7 @@ Exact shape:
 Rules:
 - test_cases is an array; use [] if nothing qualifies.
 - All values are strings (use "" if unknown).
+- If the user message includes "Section: …", only extract test cases from that section's body (it is part of a larger document sent in multiple requests).
 - steps_expected: put procedure steps, actions, AND expected results / outcomes together in one field (plain text or multi-line). Do not split into separate columns.
 - Map headings, numbered sections, and tables into logical test cases when possible.
 - test_id: short stable id if the document has one (e.g. TC_001); else synthesize from context or use empty string.
@@ -327,7 +331,62 @@ def _default_stream_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
-def extract_with_llm(
+def detect_shallowest_heading_level(text: str) -> int | None:
+    """Smallest heading depth present (# vs ##). None if no markdown headings."""
+    levels: list[int] = []
+    for line in text.split("\n"):
+        m = _HEADING_LINE_RE.match(line)
+        if m:
+            levels.append(len(m.group(1)))
+    return min(levels) if levels else None
+
+
+def split_document_by_headings(text: str, target_level: int) -> list[tuple[str, str]]:
+    """
+    Split on lines that are exactly `target_level` many '#' (Word Heading N → N hashes).
+    Returns (section_title, section_body); preamble before first heading is \"(preamble)\".
+    """
+    lines = text.split("\n")
+    sections: list[tuple[str, str]] = []
+    buf: list[str] = []
+    current_title = ""
+
+    def flush(title: str, body_lines: list[str]) -> None:
+        body = "\n".join(body_lines).strip()
+        display = title if title else "(preamble)"
+        if not body and not title:
+            return
+        if not body and display == "(preamble)":
+            return
+        sections.append((display, body))
+
+    for line in lines:
+        m = _HEADING_LINE_RE.match(line)
+        if m and len(m.group(1)) == target_level:
+            flush(current_title, buf)
+            current_title = m.group(2).strip()
+            buf = []
+        else:
+            buf.append(line)
+    flush(current_title, buf)
+    return sections
+
+
+def _resolve_heading_split_level(doc_text: str, heading_level: str) -> int:
+    hl = (heading_level or "auto").strip().lower()
+    if hl == "auto":
+        found = detect_shallowest_heading_level(doc_text)
+        return found if found is not None else 1
+    try:
+        n = int(hl)
+        if 1 <= n <= 6:
+            return n
+    except ValueError:
+        pass
+    raise LlmExtractError(f"Invalid heading level {heading_level!r}; use auto or 1–6.")
+
+
+def _extract_with_llm_single_pass(
     doc_text: str,
     *,
     base_url: str,
@@ -336,14 +395,10 @@ def extract_with_llm(
     file_name: str,
     timeout: float = REQUEST_TIMEOUT_SEC,
     stream: bool | None = None,
+    section_title: str | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
-    Call an OpenAI-compatible POST /v1/chat/completions and normalize rows.
-    api_key: use literal \"ollama\" for local Ollama.
-
-    Streaming (SSE) is used by default; set env LLM_STREAM=0 to force one-shot JSON only.
-    If env LLM_IO_LOG_PATH is set, each call appends request/response JSON to that file (Authorization redacted).
-    Returns (rows, doc_meta) where doc_meta describes input truncation (truncated, doc_char_count, max_doc_chars).
+    One chat/completions call for a single document chunk (whole file or one section).
     """
     url = _chat_url(base_url)
     headers = {"Content-Type": "application/json"}
@@ -351,13 +406,15 @@ def extract_with_llm(
         headers["Authorization"] = f"Bearer {api_key}"
 
     text, doc_meta = _truncate(doc_text)
-    user_content = f"Filename: {file_name}\n\n--- Document text ---\n\n{text}"
+    sec_line = f"Section: {section_title}\n\n" if section_title else ""
+    user_content = f"Filename: {file_name}\n{sec_line}--- Document text ---\n\n{text}"
 
     log.info(
-        "LLM extract request chat=%s model=%r file=%r truncated=%s doc_chars=%s",
+        "LLM extract request chat=%s model=%r file=%r section=%r truncated=%s doc_chars=%s",
         url,
         model,
         file_name,
+        section_title,
         doc_meta.get("truncated"),
         doc_meta.get("doc_char_count"),
     )
@@ -443,6 +500,96 @@ def extract_with_llm(
     except LlmExtractError as e:
         _llm_io_log_response_error(str(e))
         raise
+
+
+def extract_with_llm_by_sections(
+    doc_text: str,
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    file_name: str,
+    timeout: float = REQUEST_TIMEOUT_SEC,
+    stream: bool | None = None,
+    heading_level: str = "auto",
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """Split doc_text on markdown # headings, then merge rows from one LLM call per section."""
+    target = _resolve_heading_split_level(doc_text, heading_level)
+    parts = split_document_by_headings(doc_text, target)
+    log.info(
+        "LLM section mode: heading depth=%d → %d chunk(s) for %r",
+        target,
+        len(parts),
+        file_name,
+    )
+    all_rows: list[dict[str, str]] = []
+    any_trunc = False
+    n_calls = 0
+    for title, body in parts:
+        if not body.strip():
+            continue
+        n_calls += 1
+        rows, meta = _extract_with_llm_single_pass(
+            body,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            file_name=file_name,
+            timeout=timeout,
+            stream=stream,
+            section_title=title,
+        )
+        any_trunc = any_trunc or bool(meta.get("truncated"))
+        all_rows.extend(rows)
+    agg_meta: dict[str, Any] = {
+        "truncated": any_trunc,
+        "doc_char_count": len(doc_text),
+        "max_doc_chars": MAX_DOC_CHARS,
+        "llm_section_mode": True,
+        "llm_section_calls": n_calls,
+        "llm_heading_level_used": target,
+    }
+    return all_rows, agg_meta
+
+
+def extract_with_llm(
+    doc_text: str,
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    file_name: str,
+    timeout: float = REQUEST_TIMEOUT_SEC,
+    stream: bool | None = None,
+    document_scope: str = "whole",
+    heading_level: str = "auto",
+) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """
+    Call OpenAI-compatible chat/completions. Set document_scope=\"sections\" to split on markdown headings
+    (from Word styles) and run one request per section.
+    """
+    ds = (document_scope or "whole").strip().lower()
+    if ds == "sections":
+        return extract_with_llm_by_sections(
+            doc_text,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            file_name=file_name,
+            timeout=timeout,
+            stream=stream,
+            heading_level=heading_level,
+        )
+    return _extract_with_llm_single_pass(
+        doc_text,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        file_name=file_name,
+        timeout=timeout,
+        stream=stream,
+        section_title=None,
+    )
 
 
 def validate_llm_form(base_url: str, api_key: str, model: str) -> str | None:

@@ -434,6 +434,8 @@
       background: #fff;
     }
     #llm-settings .hint { margin: 0 0 8px; font-size: 0.78rem; }
+    #llm-heading-level-wrap.is-hidden { display: none !important; }
+    #llm-scope-row { margin-top: 4px; }
     #llm-models-hint {
       margin: 0 0 8px;
       font-size: 0.78rem;
@@ -490,6 +492,26 @@
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-docker-preset" title="Ollama on the host when Flask runs in Docker (Docker Desktop)">Ollama · Docker host</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-proxy-preset" title="Host gateway proxy (OpenAI-compatible /v1), often port forwarding to Ollama — same host as Docker host">Ollama · proxy :35700</button>
         </div>
+        <div class="llm-field-row" id="llm-scope-row">
+          <label>LLM document
+            <select id="llm-document-scope" aria-label="Send whole file or split by headings">
+              <option value="whole" selected>Whole file (one model request)</option>
+              <option value="sections">By section (one request per heading block)</option>
+            </select>
+          </label>
+          <label id="llm-heading-level-wrap">Split at
+            <select id="llm-heading-level" aria-label="Which heading level starts a new section">
+              <option value="auto" selected>Auto — shallowest # in file</option>
+              <option value="1">Heading 1 only (# )</option>
+              <option value="2">Heading 2 (## )</option>
+              <option value="3">Heading 3 (### )</option>
+              <option value="4">Heading 4</option>
+              <option value="5">Heading 5</option>
+              <option value="6">Heading 6</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint" id="llm-section-hint">By section: Word <em>Heading 1/2/…</em> styles become lines like <code># Title</code>. Splits the file at that depth and calls the model once per chunk (slower, fits context better). Most PDFs have no <code>#</code> lines — use whole file.</p>
         <p id="llm-models-hint" class="hint" aria-live="polite"></p>
       </div>
     </div>
@@ -664,14 +686,25 @@
     syncSupportUploadBtn();
 
     const llmSettingsEl = document.getElementById('llm-settings');
+    function syncLlmHeadingLevelVisibility() {
+      const wrap = document.getElementById('llm-heading-level-wrap');
+      const scope = document.getElementById('llm-document-scope');
+      if (!wrap || !scope) return;
+      const show = scope.value === 'sections';
+      wrap.classList.toggle('is-hidden', !show);
+      wrap.setAttribute('aria-hidden', show ? 'false' : 'true');
+    }
     function syncExtractModeUi() {
       const llm = document.querySelector('input[name="extract-mode"]:checked').value === 'llm';
       llmSettingsEl.classList.toggle('visible', llm);
+      if (llm) syncLlmHeadingLevelVisibility();
     }
     document.querySelectorAll('input[name="extract-mode"]').forEach(r => {
       r.addEventListener('change', syncExtractModeUi);
     });
     syncExtractModeUi();
+    const llmDocScopeEl = document.getElementById('llm-document-scope');
+    if (llmDocScopeEl) llmDocScopeEl.addEventListener('change', syncLlmHeadingLevelVisibility);
 
     const llmModelsHint = document.getElementById('llm-models-hint');
 
@@ -793,7 +826,12 @@
             truncHint =
               `<span class="extract-summary-row--trunc">Document was truncated for the LLM: ${dc} characters in the file; only the first ${mx} were sent.</span>`;
           }
-          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${truncHint}</div>`;
+          let secHint = '';
+          if (fr.llm_section_mode && fr.llm_section_calls != null) {
+            const lv = fr.llm_heading_level_used != null ? ` at heading depth ${esc(String(fr.llm_heading_level_used))}` : '';
+            secHint = `<span class="extract-summary-row--trunc" style="color:#0369a1;">Section mode${lv}: ${esc(String(fr.llm_section_calls))} model request(s).</span>`;
+          }
+          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${secHint}${truncHint}</div>`;
         }
         if (fr.reason === 'no_template') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples). You can also use <strong>Save for developer</strong> above to store this file on the server.</div>`;
@@ -1091,7 +1129,7 @@
       return `${m}m ${rs.toString().padStart(2, '0')}s`;
     }
 
-    function buildExtractLoadingHtml(extractMode, fileCount, elapsedMs) {
+    function buildExtractLoadingHtml(extractMode, fileCount, elapsedMs, llmSectionsMode) {
       const nf = fileCount === 1 ? '1 file' : `${fileCount} files`;
       const elapsed = formatExtractElapsed(elapsedMs);
       let phase = '';
@@ -1099,7 +1137,14 @@
       if (extractMode === 'llm') {
         if (elapsedMs < 1500) phase = 'Uploading files…';
         else if (elapsedMs < 3500) phase = 'Reading documents on the server…';
-        else if (elapsedMs < 12000) phase = 'Calling the language model…';
+        else if (llmSectionsMode) {
+          if (elapsedMs < 12000) phase = 'Extracting section by section (multiple model calls)…';
+          else if (elapsedMs < 60000) phase = 'Still running section requests…';
+          else {
+            phase = 'Still extracting sections…';
+            hint = 'Each heading block is a separate request; large specs can take several minutes.';
+          }
+        } else if (elapsedMs < 12000) phase = 'Calling the language model…';
         else if (elapsedMs < 60000) phase = 'Waiting for the model response…';
         else {
           phase = 'Still extracting…';
@@ -1126,12 +1171,12 @@
       );
     }
 
-    function startExtractProgress(extractMode, fileCount) {
+    function startExtractProgress(extractMode, fileCount, llmSectionsMode) {
       stopExtractProgress();
       const start = Date.now();
       const tick = () => {
         const elapsedMs = Date.now() - start;
-        setStatus(buildExtractLoadingHtml(extractMode, fileCount, elapsedMs), 'loading');
+        setStatus(buildExtractLoadingHtml(extractMode, fileCount, elapsedMs, !!llmSectionsMode), 'loading');
       };
       tick();
       extractProgressTimer = setInterval(tick, 450);
@@ -1233,12 +1278,15 @@
       const form = new FormData();
       selectedFiles.forEach(f => form.append('files', f));
       const extractMode = document.querySelector('input[name="extract-mode"]:checked').value;
-      startExtractProgress(extractMode, selectedFiles.length);
+      const llmSectionScope = extractMode === 'llm' && document.getElementById('llm-document-scope').value === 'sections';
+      startExtractProgress(extractMode, selectedFiles.length, llmSectionScope);
       form.append('mode', extractMode);
       if (extractMode === 'llm') {
         form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
         form.append('llm_api_key', document.getElementById('llm-api-key').value);
         form.append('llm_model', document.getElementById('llm-model').value.trim());
+        form.append('llm_document_scope', document.getElementById('llm-document-scope').value);
+        form.append('llm_heading_level', document.getElementById('llm-heading-level').value);
       }
 
       try {
