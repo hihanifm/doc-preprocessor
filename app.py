@@ -199,6 +199,7 @@ def extract():
     llm_section_split = "headings"
     llm_section_regex_hints = ""
     llm_user_hints = ""
+    llm_stream: bool | None = None
     if mode == "llm":
         llm_base_url = request.form.get("llm_base_url", "").strip()
         llm_api_key = request.form.get("llm_api_key", "").strip()
@@ -229,6 +230,12 @@ def extract():
                         "Markdown headings."
                     }
                 ), 400
+        raw_llm_stream = (request.form.get("llm_stream") or "").strip().lower()
+        if raw_llm_stream in ("1", "true", "yes", "on"):
+            llm_stream = True
+        elif raw_llm_stream in ("0", "false", "no", "off"):
+            llm_stream = False
+        # empty / auto → None (server picks by scope: whole uses LLM_STREAM; sections use LLM_STREAM_SECTIONS)
 
     all_rows = []
     errors = []
@@ -288,6 +295,7 @@ def extract():
                         section_split=llm_section_split,
                         section_regex_hints=llm_section_regex_hints,
                         user_hints=llm_user_hints,
+                        stream=llm_stream,
                     )
                     all_rows.extend(rows)
                     if tpl_label not in templates_order:

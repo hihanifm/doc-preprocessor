@@ -332,6 +332,25 @@ def _default_stream_enabled() -> bool:
     return v not in ("0", "false", "no", "off")
 
 
+def _default_stream_sections_enabled() -> bool:
+    """Default for section-by-section extraction (many sequential requests). Default off."""
+    v = (os.environ.get("LLM_STREAM_SECTIONS") or "0").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
+    """
+    If stream is None, choose by scope: whole file uses LLM_STREAM (default on);
+    sections use LLM_STREAM_SECTIONS (default off). Explicit True/False always wins.
+    """
+    if stream is not None:
+        return stream
+    ds = (document_scope or "whole").strip().lower()
+    if ds == "sections":
+        return _default_stream_sections_enabled()
+    return _default_stream_enabled()
+
+
 def detect_shallowest_heading_level(text: str) -> int | None:
     """Smallest heading depth present (# vs ##). None if no markdown headings."""
     levels: list[int] = []
@@ -576,6 +595,7 @@ def extract_with_llm_by_sections(
     user_hints: str = "",
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Split doc_text on headings or regex line patterns; merge rows from one LLM call per section."""
+    use_stream = _resolve_stream("sections", stream)
     ss = (section_split or "headings").strip().lower()
     agg_meta: dict[str, Any]
     parts: list[tuple[str, str]]
@@ -649,7 +669,7 @@ def extract_with_llm_by_sections(
             model=model,
             file_name=file_name,
             timeout=timeout,
-            stream=stream,
+            stream=use_stream,
             section_title=title,
             user_hints=uh or None,
         )
@@ -678,9 +698,13 @@ def extract_with_llm(
     """
     Call OpenAI-compatible chat/completions. Set document_scope=\"sections\" to split on markdown headings
     or regex line patterns; run one request per section. Optional user_hints text is included in each request.
+
+    Streaming: if stream is None, whole-file extraction follows LLM_STREAM (default on); section mode follows
+    LLM_STREAM_SECTIONS (default off). Pass True/False to force.
     """
     uh = (user_hints or "").strip()
     ds = (document_scope or "whole").strip().lower()
+    use_stream = _resolve_stream(document_scope, stream)
     if ds == "sections":
         return extract_with_llm_by_sections(
             doc_text,
@@ -689,7 +713,7 @@ def extract_with_llm(
             model=model,
             file_name=file_name,
             timeout=timeout,
-            stream=stream,
+            stream=use_stream,
             heading_level=heading_level,
             section_split=section_split,
             section_regex_hints=section_regex_hints,
@@ -702,7 +726,7 @@ def extract_with_llm(
         model=model,
         file_name=file_name,
         timeout=timeout,
-        stream=stream,
+        stream=use_stream,
         section_title=None,
         user_hints=uh or None,
     )

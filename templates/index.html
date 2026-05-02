@@ -511,6 +511,13 @@
               <option value="sections">By section (multiple model requests)</option>
             </select>
           </label>
+          <label>Streaming (SSE)
+            <select id="llm-stream-mode" aria-label="Use SSE streaming for chat completions">
+              <option value="auto" selected>Auto — on for whole file, off per section</option>
+              <option value="1">Always stream</option>
+              <option value="0">Never stream (one JSON response)</option>
+            </select>
+          </label>
         </div>
         <div id="llm-scope-extra" class="is-hidden">
           <div class="llm-field-row">
@@ -1358,6 +1365,8 @@
         form.append('llm_section_split', document.getElementById('llm-section-split').value);
         form.append('llm_section_regex_hints', document.getElementById('llm-section-regex-hints').value);
         form.append('llm_user_hints', document.getElementById('llm-user-hints').value.trim());
+        const streamMode = document.getElementById('llm-stream-mode').value;
+        if (streamMode !== 'auto') form.append('llm_stream', streamMode);
       }
 
       try {
