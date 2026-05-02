@@ -212,6 +212,9 @@ def _extract_core(
                     progress=progress,
                 )
                 all_rows.extend(rows)
+                sect_fail = llm_doc_meta.get("llm_section_failures") or []
+                for sf in sect_fail:
+                    errors.append(f"{display_name}: {sf}")
                 if tpl_label not in templates_order:
                     templates_order.append(tpl_label)
                 fr_ok: dict = {
@@ -223,6 +226,8 @@ def _extract_core(
                     "llm_doc_chars": llm_doc_meta.get("doc_char_count"),
                     "llm_max_doc_chars": llm_doc_meta.get("max_doc_chars"),
                 }
+                if sect_fail:
+                    fr_ok["llm_section_failure_count"] = len(sect_fail)
                 if llm_doc_meta.get("llm_section_mode"):
                     fr_ok["llm_section_mode"] = True
                     fr_ok["llm_section_calls"] = llm_doc_meta.get("llm_section_calls")

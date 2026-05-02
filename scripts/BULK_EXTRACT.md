@@ -18,6 +18,19 @@ python scripts/folder_batch_extract.py \
 - Writes **`Stem.xlsx`** next to each basename; use **`--disambiguate-ext`** if the same stem exists as both `.docx` and `.pdf` (`Stem_docx.xlsx`, `Stem_pdf.xlsx`).
 - **LLM mode** sends **`llm_progress_stream=0`** so the API returns a single JSON body (not NDJSON).
 
+### Retries (transient errors)
+
+- **`POST /extract`** and **`POST /download`** retry up to **`--max-retries`** times (default **10**) with waits **5, 10, 20, 40, 80, 160, 320, 640** seconds (then **640s**). Use **`--no-retry`** for a single attempt (debugging).
+- Retries apply to: **`URLError`** / timeouts, **`JSONDecodeError`** on a success response body, HTTP **408, 429, 500, 502, 503, 504**. Validation **4xx** (except 408/429) are **not** retried.
+
+### Skip existing outputs (default resume)
+
+- By default, if **`Stem.xlsx`** (or disambiguated name) already exists under **`--output`**, that document is **skipped** — reruns continue where the last batch stopped without redoing LLM work. Use **`--force`** to always re-extract and overwrite.
+
+### LLM section mode and partial rows
+
+- Same behavior as the web UI: if **one section** fails in LLM section mode, the server **still returns rows from successful sections** and adds messages to **`errors`**. You can still get a workbook whenever **`rows`** is non-empty.
+
 ### Template mode
 
 ```bash

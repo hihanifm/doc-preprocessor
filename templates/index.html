@@ -917,6 +917,10 @@
               secHint +=
                 ` <span class="extract-summary-row--trunc" style="color:#7c3aed;">${esc(String(fr.llm_section_empty_vz_tc_placeholder_count))} empty VZ_TC section(s) → Excel placeholder row(s) (no LLM).</span>`;
             }
+            if (fr.llm_section_failure_count > 0) {
+              secHint +=
+                ` <span class="extract-summary-row--trunc" style="color:#b45309;">${esc(String(fr.llm_section_failure_count))} section extract(s) failed — rows from successful sections were kept.</span>`;
+            }
           }
           let prepHint = '';
           if (fr.llm_prep_removed_headings && fr.llm_prep_removed_headings.length) {
@@ -1328,6 +1332,12 @@
             `<div class="llm-live-progress__sub">${fname}</div>`
           );
         }
+        case 'section_failed':
+          return (
+            `<div class="llm-live-progress__line" style="color:#b45309;">Section failed · continuing…</div>` +
+            `<div class="llm-live-progress__sub">${esc(payload.title || '')}</div>` +
+            `<div class="llm-live-progress__sub">${esc(payload.error || '')}</div>`
+          );
         case 'whole_llm':
           if (payload.phase === 'request') {
             return (
@@ -1375,6 +1385,44 @@
       };
       tick();
       extractProgressTimer = setInterval(tick, 450);
+    }
+
+    const EXTRACT_RETRY_DELAYS_SEC = [5, 10, 20, 40, 80, 160, 320, 640];
+    const RETRYABLE_FETCH_STATUS = new Set([408, 429, 500, 502, 503, 504]);
+
+    function sleepMs(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /** Retries transient network errors and retryable HTTP statuses on POST /extract */
+    async function fetchExtractWithRetry(url, options, maxAttempts = 10) {
+      let lastErr = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const resp = await fetch(url, options);
+          if (resp.ok || !RETRYABLE_FETCH_STATUS.has(resp.status)) {
+            return resp;
+          }
+          if (attempt >= maxAttempts - 1) {
+            return resp;
+          }
+          await resp.text().catch(() => {});
+          const delaySec =
+            EXTRACT_RETRY_DELAYS_SEC[Math.min(attempt, EXTRACT_RETRY_DELAYS_SEC.length - 1)];
+          console.warn(`extract retry ${attempt + 2}/${maxAttempts} in ${delaySec}s (HTTP ${resp.status})`);
+          await sleepMs(delaySec * 1000);
+        } catch (e) {
+          lastErr = e;
+          if (attempt >= maxAttempts - 1) {
+            throw e;
+          }
+          const delaySec =
+            EXTRACT_RETRY_DELAYS_SEC[Math.min(attempt, EXTRACT_RETRY_DELAYS_SEC.length - 1)];
+          console.warn(`extract retry ${attempt + 2}/${maxAttempts} in ${delaySec}s (network)`, e);
+          await sleepMs(delaySec * 1000);
+        }
+      }
+      throw lastErr || new Error('extract retries exhausted');
     }
 
     async function readNdjsonExtract(resp, startedAt, fileCount) {
@@ -1543,7 +1591,7 @@
       }
 
       try {
-        const resp = await fetch('/extract', { method: 'POST', body: form });
+        const resp = await fetchExtractWithRetry('/extract', { method: 'POST', body: form }, 10);
         const streamHdr = resp.headers.get('X-Extract-Stream');
         let data;
         if (streamHdr === '1') {

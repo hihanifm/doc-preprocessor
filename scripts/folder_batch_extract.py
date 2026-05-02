@@ -14,11 +14,19 @@ import json
 import mimetypes
 import os
 import sys
+import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urljoin, urlopen
+
+T = TypeVar("T")
+
+# Backoff before each retry after a failure (first retry waits 5s, … then cap at 640s).
+RETRY_DELAYS_SEC = (5, 10, 20, 40, 80, 160, 320, 640)
+RETRYABLE_HTTP = frozenset({408, 429, 500, 502, 503, 504})
 
 
 def _guess_mime(path: Path) -> str:
@@ -67,6 +75,12 @@ def encode_multipart(
     return ctype, body
 
 
+def _runtime_http(msg: str, code: int | None) -> RuntimeError:
+    ex = RuntimeError(msg)
+    setattr(ex, "http_status", code)
+    return ex
+
+
 def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
     rel = "/extract"
     url = urljoin(base_url.rstrip("/") + "/", rel.lstrip("/"))
@@ -87,8 +101,11 @@ def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: 
         try:
             payload = json.loads(e.read().decode("utf-8", errors="replace"))
         except Exception:
-            payload = {"error": e.reason or str(e.code)}
-        raise RuntimeError(payload.get("error", str(payload))) from e
+            payload = {}
+        msg = payload.get("error") if isinstance(payload, dict) else None
+        if not msg:
+            msg = e.reason or str(e.code)
+        raise _runtime_http(msg, e.code) from e
 
 
 def post_download(base_url: str, rows: list[dict[str, Any]], timeout: float) -> bytes:
@@ -104,7 +121,48 @@ def post_download(base_url: str, rows: list[dict[str, Any]], timeout: float) -> 
         with urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except HTTPError as e:
-        raise RuntimeError(f"download HTTP {e.code}: {e.reason}") from e
+        msg = f"download HTTP {e.code}: {e.reason}"
+        raise _runtime_http(msg, e.code) from e
+
+
+def is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, URLError):
+        return True
+    if isinstance(exc, json.JSONDecodeError):
+        return True
+    if isinstance(exc, RuntimeError):
+        code = getattr(exc, "http_status", None)
+        if code is not None and code in RETRYABLE_HTTP:
+            return True
+    return False
+
+
+def call_with_retry(
+    op_name: str,
+    fn: Callable[[], T],
+    *,
+    max_attempts: int,
+    enabled: bool,
+) -> T:
+    if not enabled or max_attempts < 2:
+        return fn()
+    last: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if not is_retryable(e) or attempt >= max_attempts - 1:
+                raise
+            delay = RETRY_DELAYS_SEC[min(attempt, len(RETRY_DELAYS_SEC) - 1)]
+            print(
+                f"  retry {attempt + 2}/{max_attempts} in {delay}s ({op_name}): {e}",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 
 def discover_inputs(source: Path, recursive: bool) -> list[Path]:
@@ -149,13 +207,11 @@ def build_extract_form(args: argparse.Namespace) -> dict[str, str]:
         form["llm_user_hints"] = args.llm_user_hints
         if args.llm_stream is not None:
             form["llm_stream"] = args.llm_stream
-        # Single JSON response (required for this script)
         form["llm_progress_stream"] = "0"
     return form
 
 
 def parse_env_defaults() -> dict[str, str]:
-    """Optional env fallbacks (see scripts/BULK_EXTRACT.md)."""
     out: dict[str, str] = {}
     if os.environ.get("DOCS_GARAGE_URL"):
         out["base_url"] = os.environ["DOCS_GARAGE_URL"].strip()
@@ -205,6 +261,22 @@ def main() -> int:
         help="HTTP timeout per request in seconds (default 720).",
     )
     parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=10,
+        help="Max attempts per HTTP call for transient errors (default 10).",
+    )
+    parser.add_argument(
+        "--no-retry",
+        action="store_true",
+        help="Disable retry/backoff (single attempt per request).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-extract even when the target .xlsx already exists (default: skip existing outputs).",
+    )
+    parser.add_argument(
         "--log-file",
         type=Path,
         default=None,
@@ -226,7 +298,6 @@ def main() -> int:
         help="Treat zero extracted rows as failure for logging and --strict-exit.",
     )
 
-    # LLM options (ignored when mode=template)
     parser.add_argument("--llm-base-url", default="", help="OpenAI-compatible base URL.")
     parser.add_argument("--llm-api-key", default="", help='API key (use "ollama" for Ollama).')
     parser.add_argument("--llm-model", default="", help="Model id.")
@@ -238,7 +309,7 @@ def main() -> int:
     parser.add_argument(
         "--llm-heading-level",
         default="auto",
-        help='Heading depth for section split: auto or 1–6.',
+        help="Heading depth for section split: auto or 1–6.",
     )
     parser.add_argument(
         "--llm-section-split",
@@ -260,7 +331,6 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # Load regex hints from file if path exists
     hints_raw = args.llm_section_regex_hints.strip()
     if hints_raw:
         p = Path(hints_raw)
@@ -302,14 +372,87 @@ def main() -> int:
         print(f"No .docx or .pdf files in {source}", file=sys.stderr)
         return 1
 
+    retry_enabled = not args.no_retry
+    max_att = max(1, args.max_retries)
+
     failures: list[dict[str, Any]] = []
     ok_count = 0
+    skip_count = 0
 
     for idx, doc_path in enumerate(files, start=1):
         rel = doc_path.name
         print(f"[{idx}/{len(files)}] {doc_path}", flush=True)
+        out_xlsx = output_path_for(doc_path, output_dir, args.disambiguate_ext)
+        if not args.force and out_xlsx.is_file():
+            skip_count += 1
+            print(f"  skip: output exists → {out_xlsx.name}", flush=True)
+            continue
+
         try:
-            data = post_json_extract(args.base_url, doc_path, form, args.timeout)
+
+            def do_extract() -> dict[str, Any]:
+                return post_json_extract(args.base_url, doc_path, form, args.timeout)
+
+            data = call_with_retry(
+                "extract",
+                do_extract,
+                max_attempts=max_att,
+                enabled=retry_enabled,
+            )
+
+            errs = data.get("errors") or []
+            rows = data.get("rows") or []
+            frs = data.get("file_results") or []
+
+            fr = frs[0] if frs else {}
+            if not fr.get("ok", True):
+                rec = {
+                    "file": rel,
+                    "phase": "extract",
+                    "reason": fr.get("reason"),
+                    "detail": fr.get("detail"),
+                    "errors": errs,
+                }
+                failures.append(rec)
+                print(f"  FAILED: {fr.get('reason')} {fr.get('detail', '')}", file=sys.stderr)
+                with log_path.open("a", encoding="utf-8") as lf:
+                    lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                if args.fail_fast:
+                    return 1
+                continue
+
+            if errs:
+                for e in errs:
+                    print(f"  warning: {e}", file=sys.stderr)
+
+            if args.skip_empty_rows and len(rows) == 0:
+                rec = {"file": rel, "phase": "rows", "error": "zero rows"}
+                failures.append(rec)
+                print("  WARNING: zero rows", file=sys.stderr)
+                with log_path.open("a", encoding="utf-8") as lf:
+                    lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                if args.fail_fast:
+                    return 1
+                continue
+
+            if len(rows) == 0:
+                print("  skip: zero rows (no .xlsx written)")
+                continue
+
+            def do_download() -> bytes:
+                return post_download(args.base_url, rows, args.timeout)
+
+            xlsx_bytes = call_with_retry(
+                "download",
+                do_download,
+                max_attempts=max_att,
+                enabled=retry_enabled,
+            )
+
+            out_xlsx.write_bytes(xlsx_bytes)
+            ok_count += 1
+            print(f"  -> {out_xlsx}")
+
         except (URLError, RuntimeError, json.JSONDecodeError) as e:
             rec = {"file": rel, "phase": "extract", "error": str(e)}
             failures.append(rec)
@@ -318,65 +461,21 @@ def main() -> int:
                 lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if args.fail_fast:
                 return 1
-            continue
-
-        errs = data.get("errors") or []
-        rows = data.get("rows") or []
-        frs = data.get("file_results") or []
-
-        fr = frs[0] if frs else {}
-        if not fr.get("ok", True):
-            rec = {
-                "file": rel,
-                "phase": "extract",
-                "reason": fr.get("reason"),
-                "detail": fr.get("detail"),
-                "errors": errs,
-            }
+        except Exception as e:
+            rec = {"file": rel, "phase": "unexpected", "error": repr(e)}
             failures.append(rec)
-            print(f"  FAILED: {fr.get('reason')} {fr.get('detail', '')}", file=sys.stderr)
+            print(f"  ERROR unexpected: {e}", file=sys.stderr)
             with log_path.open("a", encoding="utf-8") as lf:
                 lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
             if args.fail_fast:
                 return 1
-            continue
 
-        if errs:
-            for e in errs:
-                print(f"  warning: {e}", file=sys.stderr)
-
-        if args.skip_empty_rows and len(rows) == 0:
-            rec = {"file": rel, "phase": "rows", "error": "zero rows"}
-            failures.append(rec)
-            print("  WARNING: zero rows", file=sys.stderr)
-            with log_path.open("a", encoding="utf-8") as lf:
-                lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            if args.fail_fast:
-                return 1
-            continue
-
-        if len(rows) == 0:
-            print("  skip: zero rows (no .xlsx written)")
-            continue
-
-        out_xlsx = output_path_for(doc_path, output_dir, args.disambiguate_ext)
-        try:
-            xlsx_bytes = post_download(args.base_url, rows, args.timeout)
-        except (URLError, RuntimeError) as e:
-            rec = {"file": rel, "phase": "download", "error": str(e)}
-            failures.append(rec)
-            print(f"  ERROR download: {e}", file=sys.stderr)
-            with log_path.open("a", encoding="utf-8") as lf:
-                lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            if args.fail_fast:
-                return 1
-            continue
-
-        out_xlsx.write_bytes(xlsx_bytes)
-        ok_count += 1
-        print(f"  -> {out_xlsx}")
-
-    print(f"Done. Wrote {ok_count} workbook(s). Failures: {len(failures)}.")
+    parts = [
+        f"wrote {ok_count} workbook(s)",
+        f"skipped {skip_count} existing",
+        f"failures logged {len(failures)}",
+    ]
+    print(f"Done. {', '.join(parts)}.")
     if failures and args.strict_exit:
         return 1
     return 0

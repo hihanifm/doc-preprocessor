@@ -801,6 +801,7 @@ def extract_with_llm_by_sections(
         progress(plan)
 
     all_rows: list[dict[str, str]] = []
+    section_failure_msgs: list[str] = []
     any_trunc = False
     n_calls = 0
     uh = (user_hints or "").strip()
@@ -826,18 +827,40 @@ def extract_with_llm_by_sections(
                     "title": title_disp,
                 }
             )
-        rows, meta = _extract_with_llm_single_pass(
-            body,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            file_name=file_name,
-            timeout=timeout,
-            stream=use_stream,
-            section_title=title,
-            user_hints=uh or None,
-            progress=None,
-        )
+        try:
+            rows, meta = _extract_with_llm_single_pass(
+                body,
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                file_name=file_name,
+                timeout=timeout,
+                stream=use_stream,
+                section_title=title,
+                user_hints=uh or None,
+                progress=None,
+            )
+        except LlmExtractError as e:
+            msg = f'Section "{title_disp}": {e}'
+            section_failure_msgs.append(msg)
+            log.warning(
+                "LLM section extract failed file=%r section=%r: %s",
+                file_name,
+                title_disp,
+                e,
+            )
+            if progress:
+                progress(
+                    {
+                        "step": "section_failed",
+                        "file": file_name,
+                        "index": n_calls,
+                        "total": total_w,
+                        "title": title_disp,
+                        "error": str(e),
+                    }
+                )
+            continue
         any_trunc = any_trunc or bool(meta.get("truncated"))
         all_rows.extend(rows)
         if progress:
@@ -852,6 +875,8 @@ def extract_with_llm_by_sections(
             )
     agg_meta["truncated"] = any_trunc
     agg_meta["llm_section_calls"] = n_calls
+    if section_failure_msgs:
+        agg_meta["llm_section_failures"] = section_failure_msgs
     if skipped_non_test:
         agg_meta["llm_section_skipped_non_test"] = skipped_non_test
     if placeholder_titles:

@@ -22,7 +22,9 @@ source .venv/bin/activate
 python app.py [--host 0.0.0.0] [--port 5000]
 ```
 
-**Bulk folder extraction (no UI):** see [`scripts/BULK_EXTRACT.md`](scripts/BULK_EXTRACT.md) and `scripts/folder_batch_extract.py` — processes a source directory into one `.xlsx` per document via `POST /extract` and `POST /download`.
+**Bulk folder extraction (no UI):** see [`scripts/BULK_EXTRACT.md`](scripts/BULK_EXTRACT.md) and `scripts/folder_batch_extract.py` — processes a source directory into one `.xlsx` per document via `POST /extract` and `POST /download` (default: skip inputs whose output `.xlsx` already exists; transient HTTP retries with backoff).
+
+**LLM section mode:** if one section’s model call fails, extraction **continues** with remaining sections and keeps rows from successful sections (failures are listed in **`errors`**). The Test case extractor UI retries transient **`/extract`** failures with the same backoff policy as the batch script.
 
 ## Environment variables (`.env`)
 
