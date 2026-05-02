@@ -22,6 +22,8 @@ source .venv/bin/activate
 python app.py [--host 0.0.0.0] [--port 5000]
 ```
 
+**Bulk folder extraction (no UI):** see [`scripts/BULK_EXTRACT.md`](scripts/BULK_EXTRACT.md) and `scripts/folder_batch_extract.py` — processes a source directory into one `.xlsx` per document via `POST /extract` and `POST /download`.
+
 ## Environment variables (`.env`)
 
 The app loads `.env` via `python-dotenv` on startup (optional file).
