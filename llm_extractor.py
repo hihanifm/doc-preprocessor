@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -20,6 +22,9 @@ LIST_MODELS_TIMEOUT_SEC = 30
 from exporter import COLUMNS
 
 log = logging.getLogger(__name__)
+
+_LLM_IO_LOG_LOCK = threading.Lock()
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 MAX_DOC_CHARS = 120_000
 REQUEST_TIMEOUT_SEC = 180
@@ -44,6 +49,109 @@ Rules:
 
 class LlmExtractError(Exception):
     """User-visible LLM extraction failure (no secrets in message)."""
+
+
+def _resolve_llm_io_log_path() -> str | None:
+    raw = (os.environ.get("LLM_IO_LOG_PATH") or "").strip()
+    if not raw:
+        return None
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    return os.path.normpath(os.path.join(_REPO_ROOT, raw))
+
+
+def _redact_headers_for_log(headers: dict[str, str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in headers.items():
+        if k.lower() == "authorization" and isinstance(v, str) and v.lower().startswith("bearer "):
+            out[k] = "Bearer <redacted>"
+        else:
+            out[k] = v
+    return out
+
+
+def _append_llm_io_file(text: str) -> None:
+    path = _resolve_llm_io_log_path()
+    if not path:
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except OSError as e:
+            log.warning("Could not create directory for LLM_IO_LOG_PATH %r: %s", path, e)
+            return
+    try:
+        with _LLM_IO_LOG_LOCK:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(text)
+    except OSError as e:
+        log.warning("Could not append LLM_IO_LOG_PATH %r: %s", path, e)
+
+
+def _llm_io_log_request(
+    *,
+    url: str,
+    headers: dict[str, str],
+    model: str,
+    file_name: str,
+    doc_meta: dict[str, Any],
+    use_stream: bool,
+    payload: dict[str, Any],
+    payload_json: dict[str, Any],
+) -> None:
+    if not _resolve_llm_io_log_path():
+        return
+    block = {
+        "event": "llm_chat_completion_request",
+        "time_utc": datetime.now(timezone.utc).isoformat(),
+        "url": url,
+        "model": model,
+        "file_name": file_name,
+        "doc_meta": doc_meta,
+        "stream_enabled": use_stream,
+        "headers_redacted": _redact_headers_for_log(headers),
+        "payload": payload,
+        "payload_with_response_format_json_object": payload_json,
+    }
+    try:
+        body = json.dumps(block, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError) as e:
+        log.warning("LLM IO log could not serialize request: %s", e)
+        return
+    _append_llm_io_file("\n" + "=" * 72 + "\n" + body + "\n")
+
+
+def _llm_io_log_response_ok(*, assistant_text: str, row_count: int) -> None:
+    if not _resolve_llm_io_log_path():
+        return
+    block = {
+        "event": "llm_chat_completion_response",
+        "time_utc": datetime.now(timezone.utc).isoformat(),
+        "assistant_text": assistant_text,
+        "normalized_row_count": row_count,
+    }
+    try:
+        body = json.dumps(block, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError) as e:
+        log.warning("LLM IO log could not serialize response: %s", e)
+        return
+    _append_llm_io_file(body + "\n")
+
+
+def _llm_io_log_response_error(message: str) -> None:
+    if not _resolve_llm_io_log_path():
+        return
+    block = {
+        "event": "llm_chat_completion_error",
+        "time_utc": datetime.now(timezone.utc).isoformat(),
+        "error": message,
+    }
+    try:
+        body = json.dumps(block, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        body = json.dumps(block, ensure_ascii=False)
+    _append_llm_io_file(body + "\n")
 
 
 def _truncate(doc_text: str) -> tuple[str, dict[str, Any]]:
@@ -234,6 +342,7 @@ def extract_with_llm(
     api_key: use literal \"ollama\" for local Ollama.
 
     Streaming (SSE) is used by default; set env LLM_STREAM=0 to force one-shot JSON only.
+    If env LLM_IO_LOG_PATH is set, each call appends request/response JSON to that file (Authorization redacted).
     Returns (rows, doc_meta) where doc_meta describes input truncation (truncated, doc_char_count, max_doc_chars).
     """
     url = _chat_url(base_url)
@@ -267,57 +376,73 @@ def extract_with_llm(
     # Prefer JSON mode when supported (OpenAI); Ollama often rejects — retry without on HTTP 400.
     payload_json = {**payload, "response_format": {"type": "json_object"}}
 
-    content = ""
-
-    if use_stream:
-        log.debug("LLM extract using streaming (SSE)")
-        try:
-            content = _post_stream_collect(url, headers, payload_json, timeout)
-        except LlmExtractError as first:
-            if "HTTP error 400" not in str(first):
-                raise
-            log.info("LLM stream with json_object rejected HTTP 400; retry stream without response_format")
-            content = _post_stream_collect(url, headers, payload, timeout)
-
-        if not content.strip():
-            log.warning("LLM streaming returned empty assistant text; falling back to non-streaming completion")
-
-    if not content.strip():
-        try:
-            data = _post_json(url, headers, payload_json, timeout)
-        except LlmExtractError as first:
-            if "HTTP error 400" not in str(first):
-                raise
-            data = _post_json(url, headers, payload, timeout)
-        choices = data.get("choices") or []
-        if not choices:
-            raise LlmExtractError("LLM returned no choices.")
-        try:
-            msg0 = choices[0].get("message")
-            content = (msg0.get("content") or "") if isinstance(msg0, dict) else ""
-        except (TypeError, KeyError, IndexError) as e:
-            raise LlmExtractError(f"Unexpected LLM response shape: {e}") from None
-
-    if not content.strip():
-        raise LlmExtractError("LLM returned empty content.")
+    _llm_io_log_request(
+        url=url,
+        headers=headers,
+        model=model,
+        file_name=file_name,
+        doc_meta=doc_meta,
+        use_stream=use_stream,
+        payload=payload,
+        payload_json=payload_json,
+    )
 
     try:
-        parsed = json.loads(_strip_json_fence(content))
-    except json.JSONDecodeError as e:
-        raise LlmExtractError(f"Model output was not valid JSON: {e}") from None
+        content = ""
 
-    cases = parsed.get("test_cases")
-    if cases is None:
-        raise LlmExtractError('JSON must contain a "test_cases" array.')
-    if not isinstance(cases, list):
-        raise LlmExtractError('"test_cases" must be an array.')
+        if use_stream:
+            log.debug("LLM extract using streaming (SSE)")
+            try:
+                content = _post_stream_collect(url, headers, payload_json, timeout)
+            except LlmExtractError as first:
+                if "HTTP error 400" not in str(first):
+                    raise
+                log.info("LLM stream with json_object rejected HTTP 400; retry stream without response_format")
+                content = _post_stream_collect(url, headers, payload, timeout)
 
-    rows: list[dict[str, str]] = []
-    for item in cases:
-        if not isinstance(item, dict):
-            continue
-        rows.append(_normalize_case(item, file_name))
-    return rows, doc_meta
+            if not content.strip():
+                log.warning("LLM streaming returned empty assistant text; falling back to non-streaming completion")
+
+        if not content.strip():
+            try:
+                data = _post_json(url, headers, payload_json, timeout)
+            except LlmExtractError as first:
+                if "HTTP error 400" not in str(first):
+                    raise
+                data = _post_json(url, headers, payload, timeout)
+            choices = data.get("choices") or []
+            if not choices:
+                raise LlmExtractError("LLM returned no choices.")
+            try:
+                msg0 = choices[0].get("message")
+                content = (msg0.get("content") or "") if isinstance(msg0, dict) else ""
+            except (TypeError, KeyError, IndexError) as e:
+                raise LlmExtractError(f"Unexpected LLM response shape: {e}") from None
+
+        if not content.strip():
+            raise LlmExtractError("LLM returned empty content.")
+
+        try:
+            parsed = json.loads(_strip_json_fence(content))
+        except json.JSONDecodeError as e:
+            raise LlmExtractError(f"Model output was not valid JSON: {e}") from None
+
+        cases = parsed.get("test_cases")
+        if cases is None:
+            raise LlmExtractError('JSON must contain a "test_cases" array.')
+        if not isinstance(cases, list):
+            raise LlmExtractError('"test_cases" must be an array.')
+
+        rows: list[dict[str, str]] = []
+        for item in cases:
+            if not isinstance(item, dict):
+                continue
+            rows.append(_normalize_case(item, file_name))
+        _llm_io_log_response_ok(assistant_text=content, row_count=len(rows))
+        return rows, doc_meta
+    except LlmExtractError as e:
+        _llm_io_log_response_error(str(e))
+        raise
 
 
 def validate_llm_form(base_url: str, api_key: str, model: str) -> str | None:

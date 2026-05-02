@@ -7,6 +7,7 @@ __pycache__/
 # App runtime
 .env
 data/
+llm_io.log
 config.json
 pip-cache/*.whl
 

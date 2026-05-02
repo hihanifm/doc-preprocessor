@@ -31,6 +31,7 @@ The app loads `.env` via `python-dotenv` on startup (optional file).
 | `SUPPORT_UPLOAD_DIR` | No | `support_uploads` | **Save for developer** inbox (always on). Relative paths resolve from the folder containing `app.py`; omit `.env` entirely to use the default folder next to `app.py`. |
 | `LOG_LEVEL` | No | `INFO` | Python logging level (`DEBUG`, `INFO`, …). |
 | `LLM_STREAM` | No | `1` | When truthy, LLM extraction uses OpenAI-style **streaming** (`stream: true`); set `0` / `false` / `off` for non-streaming completions only. |
+| `LLM_IO_LOG_PATH` | No | *(unset)* | If set, append JSON lines for each LLM **chat** request and response to this file ( **`Authorization` redacted** ). Relative paths are resolved from the project root next to `app.py`. Contains document text and model output — protect the file. |
 
 ## LLM extraction (UI)
 
@@ -40,6 +41,7 @@ On the **Test case extractor** tab you can choose **LLM (OpenAI-compatible)** in
 - **HTTPS:** if the app is not on `localhost`, use HTTPS so the key is not sent in clear text.
 - **Ollama:** use **Ollama · localhost** when Flask runs on your machine (`http://127.0.0.1:11434/v1`), or **Ollama · Docker host** when the app runs in Docker and Ollama is on the host (`http://host.docker.internal:11434/v1`). API key `ollama`, then pick a model (optional **Fetch models**). Linux Docker may need `--add-host=host.docker.internal:host-gateway` if `host.docker.internal` is missing.
 - **Streaming:** `chat/completions` uses **SSE streaming** by default (`stream: true`); if the body is empty or a provider ignores streaming, the server falls back to a non-streaming completion. Set **`LLM_STREAM=0`** in `.env` to force one-shot requests only.
+- **Debug file:** set **`LLM_IO_LOG_PATH`** (e.g. `llm_io.log`) to append structured request/response records for **extract** calls only (not `/llm-models`). API keys are not written verbatim (`Bearer <redacted>`).
 - Output rows match [`exporter.py`](exporter.py) columns (including **`steps_expected`**). Implementation: [`llm_extractor.py`](llm_extractor.py).
 
 ## Installing dependencies
