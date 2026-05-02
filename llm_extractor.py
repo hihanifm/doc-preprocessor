@@ -13,7 +13,7 @@ import os
 import re
 import threading
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -470,6 +470,7 @@ def _extract_with_llm_single_pass(
     stream: bool | None = None,
     section_title: str | None = None,
     user_hints: str | None = None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     One chat/completions call for a single document chunk (whole file or one section).
@@ -523,6 +524,15 @@ def _extract_with_llm_single_pass(
     )
 
     try:
+        if progress and section_title is None:
+            progress(
+                {
+                    "step": "whole_llm",
+                    "phase": "request",
+                    "file": file_name,
+                }
+            )
+
         content = ""
 
         if use_stream:
@@ -574,6 +584,15 @@ def _extract_with_llm_single_pass(
                 continue
             rows.append(_normalize_case(item, file_name))
         _llm_io_log_response_ok(assistant_text=content, row_count=len(rows))
+        if progress and section_title is None:
+            progress(
+                {
+                    "step": "whole_llm",
+                    "phase": "done",
+                    "file": file_name,
+                    "rows_found": len(rows),
+                }
+            )
         return rows, doc_meta
     except LlmExtractError as e:
         _llm_io_log_response_error(str(e))
@@ -593,6 +612,7 @@ def extract_with_llm_by_sections(
     section_split: str = "headings",
     section_regex_hints: str = "",
     user_hints: str = "",
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """Split doc_text on headings or regex line patterns; merge rows from one LLM call per section."""
     use_stream = _resolve_stream("sections", stream)
@@ -654,14 +674,35 @@ def extract_with_llm_by_sections(
             "llm_heading_level_used": target,
         }
 
+    work_items = [(t, b) for t, b in parts if b.strip()]
+    if progress:
+        progress(
+            {
+                "step": "sections_plan",
+                "file": file_name,
+                "total_sections": len(work_items),
+                "section_split": ss,
+            }
+        )
+
     all_rows: list[dict[str, str]] = []
     any_trunc = False
     n_calls = 0
     uh = (user_hints or "").strip()
-    for title, body in parts:
-        if not body.strip():
-            continue
+    total_w = len(work_items)
+    for title, body in work_items:
         n_calls += 1
+        title_disp = title if len(title) <= 480 else title[:477] + "…"
+        if progress:
+            progress(
+                {
+                    "step": "section_start",
+                    "file": file_name,
+                    "index": n_calls,
+                    "total": total_w,
+                    "title": title_disp,
+                }
+            )
         rows, meta = _extract_with_llm_single_pass(
             body,
             base_url=base_url,
@@ -672,9 +713,20 @@ def extract_with_llm_by_sections(
             stream=use_stream,
             section_title=title,
             user_hints=uh or None,
+            progress=None,
         )
         any_trunc = any_trunc or bool(meta.get("truncated"))
         all_rows.extend(rows)
+        if progress:
+            progress(
+                {
+                    "step": "section_done",
+                    "file": file_name,
+                    "index": n_calls,
+                    "rows_in_section": len(rows),
+                    "cumulative_rows": len(all_rows),
+                }
+            )
     agg_meta["truncated"] = any_trunc
     agg_meta["llm_section_calls"] = n_calls
     return all_rows, agg_meta
@@ -694,6 +746,7 @@ def extract_with_llm(
     section_split: str = "headings",
     section_regex_hints: str = "",
     user_hints: str = "",
+    progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     """
     Call OpenAI-compatible chat/completions. Set document_scope=\"sections\" to split on markdown headings
@@ -718,6 +771,7 @@ def extract_with_llm(
             section_split=section_split,
             section_regex_hints=section_regex_hints,
             user_hints=uh,
+            progress=progress,
         )
     return _extract_with_llm_single_pass(
         doc_text,
@@ -729,6 +783,7 @@ def extract_with_llm(
         stream=use_stream,
         section_title=None,
         user_hints=uh or None,
+        progress=progress,
     )
 
 

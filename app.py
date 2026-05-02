@@ -1,13 +1,17 @@
+import json
 import logging
 import os
+import queue
 import re
 import subprocess
 import tempfile
+import threading
 import uuid
 from datetime import datetime, timezone
+from typing import Any, Callable
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, Response, send_from_directory
+from flask import Flask, jsonify, render_template, request, Response, send_from_directory, stream_with_context
 
 import extractors as extractor_registry
 
@@ -71,6 +75,239 @@ def _safe_support_save_parts(original: str | None) -> tuple[str, str] | None:
 FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with"})
 
 _MAX_LLM_USER_HINT_CHARS = 8000
+
+
+def _cleanup_staged_path(path: str | None) -> None:
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _stage_uploaded_files(files) -> list[dict[str, Any]]:
+    """Save uploads to temp files. Each item is {\"kind\": \"ok\", ...} or {\"kind\": \"bad\", ...}."""
+    out: list[dict[str, Any]] = []
+    for f in files:
+        display_name = f.filename or "(upload)"
+        suffix = _document_suffix(f.filename)
+        if not suffix:
+            out.append({"kind": "bad", "display_name": display_name, "reason": "unsupported"})
+            continue
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                f.save(tmp.name)
+                out.append({"kind": "ok", "display_name": display_name, "path": tmp.name})
+        except OSError as e:
+            out.append(
+                {
+                    "kind": "bad",
+                    "display_name": display_name,
+                    "reason": "save_error",
+                    "detail": str(e),
+                }
+            )
+    return out
+
+
+def _extract_core(
+    work_list: list[dict[str, Any]],
+    *,
+    mode: str,
+    llm_base_url: str,
+    llm_api_key: str,
+    llm_model: str,
+    llm_document_scope: str,
+    llm_heading_level: str,
+    llm_section_split: str,
+    llm_section_regex_hints: str,
+    llm_user_hints: str,
+    llm_stream: bool | None,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    all_rows: list = []
+    errors: list[str] = []
+    file_results: list[dict] = []
+    templates_order: list[str] = []
+    n_ok = sum(1 for w in work_list if w.get("kind") == "ok")
+    fi = 0
+
+    for item in work_list:
+        if item.get("kind") == "bad":
+            display_name = item["display_name"]
+            if item.get("reason") == "unsupported":
+                msg = f"{display_name}: only .docx and .pdf files are supported"
+                errors.append(msg)
+                file_results.append(
+                    {
+                        "filename": display_name,
+                        "template": None,
+                        "rows": 0,
+                        "ok": False,
+                        "reason": "unsupported",
+                    }
+                )
+            else:
+                detail = item.get("detail") or "could not save upload"
+                msg = f"{display_name}: {detail}"
+                errors.append(msg)
+                file_results.append(
+                    {
+                        "filename": display_name,
+                        "template": None,
+                        "rows": 0,
+                        "ok": False,
+                        "reason": "exception",
+                        "detail": detail,
+                    }
+                )
+            continue
+
+        fi += 1
+        display_name = item["display_name"]
+        tmp_path = item["path"]
+
+        if progress:
+            progress(
+                {
+                    "step": "file_begin",
+                    "file": display_name,
+                    "index": fi,
+                    "total_files": n_ok,
+                }
+            )
+
+        try:
+            doc_text = read_document(tmp_path)
+            if not doc_text.strip():
+                errors.append(
+                    f"{display_name}: No extractable text in this PDF (common for scanned "
+                    "documents). OCR is not supported — use a digital/text-based PDF."
+                )
+                file_results.append(
+                    {
+                        "filename": display_name,
+                        "template": None,
+                        "rows": 0,
+                        "ok": False,
+                        "reason": "empty_text",
+                    }
+                )
+                continue
+
+            if mode == "llm":
+                tpl_label = f"LLM ({llm_model})"
+                rows, llm_doc_meta = extract_with_llm(
+                    doc_text,
+                    base_url=llm_base_url,
+                    api_key=llm_api_key,
+                    model=llm_model,
+                    file_name=display_name,
+                    document_scope=llm_document_scope,
+                    heading_level=llm_heading_level,
+                    section_split=llm_section_split,
+                    section_regex_hints=llm_section_regex_hints,
+                    user_hints=llm_user_hints,
+                    stream=llm_stream,
+                    progress=progress,
+                )
+                all_rows.extend(rows)
+                if tpl_label not in templates_order:
+                    templates_order.append(tpl_label)
+                fr_ok: dict = {
+                    "filename": display_name,
+                    "template": tpl_label,
+                    "rows": len(rows),
+                    "ok": True,
+                    "llm_truncated": bool(llm_doc_meta.get("truncated")),
+                    "llm_doc_chars": llm_doc_meta.get("doc_char_count"),
+                    "llm_max_doc_chars": llm_doc_meta.get("max_doc_chars"),
+                }
+                if llm_doc_meta.get("llm_section_mode"):
+                    fr_ok["llm_section_mode"] = True
+                    fr_ok["llm_section_calls"] = llm_doc_meta.get("llm_section_calls")
+                    fr_ok["llm_section_split"] = llm_doc_meta.get("llm_section_split")
+                    if llm_doc_meta.get("llm_heading_level_used") is not None:
+                        fr_ok["llm_heading_level_used"] = llm_doc_meta.get("llm_heading_level_used")
+                    if llm_doc_meta.get("llm_pattern_count") is not None:
+                        fr_ok["llm_pattern_count"] = llm_doc_meta.get("llm_pattern_count")
+                file_results.append(fr_ok)
+                continue
+
+            ext = extractor_registry.find_extractor(doc_text)
+
+            if ext is None:
+                errors.append(
+                    f"{display_name}: No extractor template matched this document. "
+                    "Ask your developer to add an extractor under extractors/ "
+                    "(see samples/ for reference formats)."
+                )
+                file_results.append(
+                    {
+                        "filename": display_name,
+                        "template": None,
+                        "rows": 0,
+                        "ok": False,
+                        "reason": "no_template",
+                    }
+                )
+                continue
+
+            rows = ext.extract(doc_text, display_name)
+            all_rows.extend(rows)
+            if ext.name not in templates_order:
+                templates_order.append(ext.name)
+            file_results.append(
+                {
+                    "filename": display_name,
+                    "template": ext.name,
+                    "rows": len(rows),
+                    "ok": True,
+                }
+            )
+
+        except LlmExtractError as le:
+            logger.warning(
+                "POST /extract LLM failed file=%r model=%r: %s",
+                display_name,
+                llm_model,
+                le,
+            )
+            errors.append(f"{display_name}: {le}")
+            file_results.append(
+                {
+                    "filename": display_name,
+                    "template": None,
+                    "rows": 0,
+                    "ok": False,
+                    "reason": "llm_error",
+                    "detail": str(le),
+                }
+            )
+        except Exception as e:
+            errors.append(f"{display_name}: {e}")
+            file_results.append(
+                {
+                    "filename": display_name,
+                    "template": None,
+                    "rows": 0,
+                    "ok": False,
+                    "reason": "exception",
+                    "detail": str(e),
+                }
+            )
+        finally:
+            _cleanup_staged_path(tmp_path)
+
+    template_used = " · ".join(templates_order) if templates_order else None
+
+    return {
+        "rows": all_rows,
+        "errors": errors,
+        "template": template_used,
+        "file_results": file_results,
+    }
+
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
@@ -237,163 +474,84 @@ def extract():
             llm_stream = False
         # empty / auto → None (server picks by scope: whole uses LLM_STREAM; sections use LLM_STREAM_SECTIONS)
 
-    all_rows = []
-    errors = []
-    file_results: list[dict] = []
-    templates_order: list[str] = []
-    tmp_path = None
+    raw_prog = (request.form.get("llm_progress_stream") or "1").strip().lower()
+    want_stream = mode == "llm" and raw_prog not in ("0", "false", "no", "off")
 
-    for f in files:
-        display_name = f.filename or "(upload)"
-        suffix = _document_suffix(f.filename)
-        if not suffix:
-            msg = f"{display_name}: only .docx and .pdf files are supported"
-            errors.append(msg)
-            file_results.append(
-                {
-                    "filename": display_name,
-                    "template": None,
-                    "rows": 0,
-                    "ok": False,
-                    "reason": "unsupported",
-                }
-            )
-            continue
-        try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                f.save(tmp.name)
-                tmp_path = tmp.name
+    work_list = _stage_uploaded_files(files)
 
-            doc_text = read_document(tmp_path)
-            if not doc_text.strip():
-                errors.append(
-                    f"{display_name}: No extractable text in this PDF (common for scanned "
-                    "documents). OCR is not supported — use a digital/text-based PDF."
+    if want_stream:
+        q: queue.Queue[tuple[str, Any]] = queue.Queue()
+        holder: dict[str, Any] = {}
+
+        def worker():
+            try:
+                holder["payload"] = _extract_core(
+                    work_list,
+                    mode=mode,
+                    llm_base_url=llm_base_url,
+                    llm_api_key=llm_api_key,
+                    llm_model=llm_model,
+                    llm_document_scope=llm_document_scope,
+                    llm_heading_level=llm_heading_level,
+                    llm_section_split=llm_section_split,
+                    llm_section_regex_hints=llm_section_regex_hints,
+                    llm_user_hints=llm_user_hints,
+                    llm_stream=llm_stream,
+                    progress=lambda ev: q.put(("p", ev)),
                 )
-                file_results.append(
-                    {
-                        "filename": display_name,
-                        "template": None,
-                        "rows": 0,
-                        "ok": False,
-                        "reason": "empty_text",
-                    }
+            except Exception as e:
+                holder["err"] = e
+            finally:
+                q.put(("done", None))
+
+        th = threading.Thread(target=worker, daemon=True)
+        th.start()
+
+        def generate():
+            while True:
+                kind, payload = q.get()
+                if kind == "p":
+                    yield (
+                        json.dumps({"type": "progress", "data": payload}, ensure_ascii=False) + "\n"
+                    ).encode("utf-8")
+                elif kind == "done":
+                    break
+            th.join(timeout=720)
+            err = holder.get("err")
+            if err is not None:
+                yield (json.dumps({"type": "error", "message": str(err)}, ensure_ascii=False) + "\n").encode(
+                    "utf-8"
                 )
-                continue
+                return
+            pl = holder.get("payload")
+            if pl is None:
+                yield (
+                    json.dumps({"type": "error", "message": "No extraction result"}, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+                return
+            yield (json.dumps({"type": "result", **pl}, ensure_ascii=False) + "\n").encode("utf-8")
 
-            if mode == "llm":
-                tpl_label = f"LLM ({llm_model})"
-                try:
-                    rows, llm_doc_meta = extract_with_llm(
-                        doc_text,
-                        base_url=llm_base_url,
-                        api_key=llm_api_key,
-                        model=llm_model,
-                        file_name=display_name,
-                        document_scope=llm_document_scope,
-                        heading_level=llm_heading_level,
-                        section_split=llm_section_split,
-                        section_regex_hints=llm_section_regex_hints,
-                        user_hints=llm_user_hints,
-                        stream=llm_stream,
-                    )
-                    all_rows.extend(rows)
-                    if tpl_label not in templates_order:
-                        templates_order.append(tpl_label)
-                    fr_ok: dict = {
-                        "filename": display_name,
-                        "template": tpl_label,
-                        "rows": len(rows),
-                        "ok": True,
-                        "llm_truncated": bool(llm_doc_meta.get("truncated")),
-                        "llm_doc_chars": llm_doc_meta.get("doc_char_count"),
-                        "llm_max_doc_chars": llm_doc_meta.get("max_doc_chars"),
-                    }
-                    if llm_doc_meta.get("llm_section_mode"):
-                        fr_ok["llm_section_mode"] = True
-                        fr_ok["llm_section_calls"] = llm_doc_meta.get("llm_section_calls")
-                        fr_ok["llm_section_split"] = llm_doc_meta.get("llm_section_split")
-                        if llm_doc_meta.get("llm_heading_level_used") is not None:
-                            fr_ok["llm_heading_level_used"] = llm_doc_meta.get("llm_heading_level_used")
-                        if llm_doc_meta.get("llm_pattern_count") is not None:
-                            fr_ok["llm_pattern_count"] = llm_doc_meta.get("llm_pattern_count")
-                    file_results.append(fr_ok)
-                except LlmExtractError as le:
-                    logger.warning("POST /extract LLM failed file=%r model=%r: %s", display_name, llm_model, le)
-                    errors.append(f"{display_name}: {le}")
-                    file_results.append(
-                        {
-                            "filename": display_name,
-                            "template": None,
-                            "rows": 0,
-                            "ok": False,
-                            "reason": "llm_error",
-                            "detail": str(le),
-                        }
-                    )
-                continue
-
-            ext = extractor_registry.find_extractor(doc_text)
-
-            if ext is None:
-                errors.append(
-                    f"{display_name}: No extractor template matched this document. "
-                    "Ask your developer to add an extractor under extractors/ "
-                    "(see samples/ for reference formats)."
-                )
-                file_results.append(
-                    {
-                        "filename": display_name,
-                        "template": None,
-                        "rows": 0,
-                        "ok": False,
-                        "reason": "no_template",
-                    }
-                )
-                continue
-
-            rows = ext.extract(doc_text, display_name)
-            all_rows.extend(rows)
-            if ext.name not in templates_order:
-                templates_order.append(ext.name)
-            file_results.append(
-                {
-                    "filename": display_name,
-                    "template": ext.name,
-                    "rows": len(rows),
-                    "ok": True,
-                }
-            )
-
-        except Exception as e:
-            errors.append(f"{display_name}: {e}")
-            file_results.append(
-                {
-                    "filename": display_name,
-                    "template": None,
-                    "rows": 0,
-                    "ok": False,
-                    "reason": "exception",
-                    "detail": str(e),
-                }
-            )
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except Exception:
-                    pass
-                tmp_path = None
-
-    template_used = " · ".join(templates_order) if templates_order else None
+        return Response(
+            stream_with_context(generate()),
+            mimetype="application/x-ndjson",
+            headers={"Cache-Control": "no-store", "X-Extract-Stream": "1"},
+        )
 
     return jsonify(
-        {
-            "rows": all_rows,
-            "errors": errors,
-            "template": template_used,
-            "file_results": file_results,
-        }
+        _extract_core(
+            work_list,
+            mode=mode,
+            llm_base_url=llm_base_url,
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            llm_document_scope=llm_document_scope,
+            llm_heading_level=llm_heading_level,
+            llm_section_split=llm_section_split,
+            llm_section_regex_hints=llm_section_regex_hints,
+            llm_user_hints=llm_user_hints,
+            llm_stream=llm_stream,
+            progress=None,
+        )
     )
 
 
