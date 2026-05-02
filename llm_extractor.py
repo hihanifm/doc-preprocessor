@@ -8,6 +8,7 @@ Uses stdlib urllib only (no extra HTTP dependency).
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -16,6 +17,8 @@ from urllib.request import Request, urlopen
 LIST_MODELS_TIMEOUT_SEC = 30
 
 from exporter import COLUMNS
+
+log = logging.getLogger(__name__)
 
 MAX_DOC_CHARS = 120_000
 REQUEST_TIMEOUT_SEC = 180
@@ -116,11 +119,19 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeo
             err_body = e.read().decode("utf-8", errors="replace")[:500]
         except Exception:
             err_body = ""
+        log.warning(
+            "LLM POST %s failed HTTP %s (response snippet: %r)",
+            url,
+            e.code,
+            (err_body[:300] + "…") if len(err_body) > 300 else err_body,
+        )
         hint = f" {err_body}" if err_body else ""
         raise LlmExtractError(f"LLM HTTP error {e.code}.{hint}".strip()) from None
     except URLError as e:
+        log.warning("LLM POST %s unreachable: %s", url, e.reason)
         raise LlmExtractError(f"Could not reach LLM server: {e.reason!s}") from None
     except json.JSONDecodeError as e:
+        log.warning("LLM POST %s returned invalid JSON: %s", url, e)
         raise LlmExtractError(f"Invalid JSON from LLM server: {e}") from None
 
 
@@ -146,6 +157,15 @@ def extract_with_llm(
 
     text, doc_meta = _truncate(doc_text)
     user_content = f"Filename: {file_name}\n\n--- Document text ---\n\n{text}"
+
+    log.info(
+        "LLM extract request chat=%s model=%r file=%r truncated=%s doc_chars=%s",
+        url,
+        model,
+        file_name,
+        doc_meta.get("truncated"),
+        doc_meta.get("doc_char_count"),
+    )
 
     payload: dict[str, Any] = {
         "model": model,
@@ -204,18 +224,42 @@ def validate_llm_form(base_url: str, api_key: str, model: str) -> str | None:
 def _get_openai_compatible_model_ids(base_url: str, headers: dict[str, str], timeout: float) -> list[str] | None:
     """GET {base}/models. Returns None if endpoint missing or unusable; raises LlmExtractError on 401/403."""
     url = base_url.rstrip("/") + "/models"
+    log.info("Listing models: OpenAI-compatible GET %s (Authorization header: %s)", url, "yes" if headers else "no")
     try:
         req = Request(url, headers=headers, method="GET")
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return [str(x["id"]) for x in data.get("data") or [] if x.get("id")]
+        ids = [str(x["id"]) for x in data.get("data") or [] if x.get("id")]
+        log.info("OpenAI-compatible /models returned %d id(s)", len(ids))
+        return ids
     except HTTPError as e:
         if e.code in (401, 403):
+            log.warning("OpenAI-compatible /models denied HTTP %s for %s", e.code, url)
             raise LlmExtractError(
                 f"Listing models was denied (HTTP {e.code}). Check the API key and base URL."
             ) from None
+        try:
+            body_snip = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            body_snip = ""
+        log.warning(
+            "OpenAI-compatible /models not used (HTTP %s for %s): %r",
+            e.code,
+            url,
+            body_snip,
+        )
         return None
-    except (URLError, TimeoutError, json.JSONDecodeError, TypeError, KeyError):
+    except TimeoutError:
+        log.warning("OpenAI-compatible /models timeout after %ss: %s", timeout, url)
+        return None
+    except URLError as e:
+        log.warning("OpenAI-compatible /models connection error for %s: %s", url, e.reason)
+        return None
+    except json.JSONDecodeError as e:
+        log.warning("OpenAI-compatible /models invalid JSON from %s: %s", url, e)
+        return None
+    except (TypeError, KeyError) as e:
+        log.warning("OpenAI-compatible /models unexpected response shape from %s: %s", url, e)
         return None
 
 
@@ -226,15 +270,41 @@ def _get_ollama_model_tags(base_url: str, timeout: float) -> list[str] | None:
         u = "http://" + u
     parsed = urlparse(u)
     if not parsed.netloc:
+        log.warning("Ollama /api/tags: could not parse host from base_url %r", base_url)
         return None
     origin = f"{parsed.scheme}://{parsed.netloc}"
     url = origin + "/api/tags"
+    log.info("Listing models: Ollama GET %s (origin from base_url %r)", url, base_url)
     try:
         req = Request(url, method="GET")
         with urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        return [str(m["name"]) for m in data.get("models") or [] if m.get("name")]
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, TypeError, KeyError):
+        names = [str(m["name"]) for m in data.get("models") or [] if m.get("name")]
+        log.info("Ollama /api/tags returned %d model name(s)", len(names))
+        return names
+    except HTTPError as e:
+        try:
+            body_snip = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            body_snip = ""
+        log.warning(
+            "Ollama /api/tags HTTP %s for %s (body snippet: %r)",
+            e.code,
+            url,
+            body_snip,
+        )
+        return None
+    except TimeoutError:
+        log.warning("Ollama /api/tags timeout after %ss: %s", timeout, url)
+        return None
+    except URLError as e:
+        log.warning("Ollama /api/tags unreachable %s — %s (check host.docker.internal vs 127.0.0.1 if using Docker)", url, e.reason)
+        return None
+    except json.JSONDecodeError as e:
+        log.warning("Ollama /api/tags invalid JSON from %s: %s", url, e)
+        return None
+    except (TypeError, KeyError) as e:
+        log.warning("Ollama /api/tags unexpected response from %s: %s", url, e)
         return None
 
 
@@ -250,14 +320,28 @@ def fetch_model_ids(base_url: str, api_key: str, timeout: float = LIST_MODELS_TI
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
 
+    log.info(
+        "fetch_model_ids: trying OpenAI path then Ollama; base_url=%r api_key_provided=%s",
+        base_url,
+        bool(api_key.strip()),
+    )
+
     openai_ids = _get_openai_compatible_model_ids(base_url, headers, timeout)
     if openai_ids:
-        return sorted(set(openai_ids))
+        out = sorted(set(openai_ids))
+        log.info("fetch_model_ids: using OpenAI-compatible list (%d models)", len(out))
+        return out
 
     ollama_ids = _get_ollama_model_tags(base_url, timeout)
     if ollama_ids:
-        return sorted(set(ollama_ids))
+        out = sorted(set(ollama_ids))
+        log.info("fetch_model_ids: using Ollama /api/tags list (%d models)", len(out))
+        return out
 
+    log.warning(
+        "fetch_model_ids: both OpenAI /models and Ollama /api/tags failed or returned empty for base_url=%r",
+        base_url,
+    )
     raise LlmExtractError(
         "Could not list models. For OpenAI-compatible APIs use a base URL ending in /v1. "
         "For Ollama on the same machine as the app, use http://127.0.0.1:11434/v1. "

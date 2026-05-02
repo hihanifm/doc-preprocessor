@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import subprocess
@@ -11,6 +12,22 @@ from flask import Flask, jsonify, render_template, request, Response, send_from_
 import extractors as extractor_registry
 
 load_dotenv()
+
+
+def _configure_logging() -> None:
+    if logging.root.handlers:
+        return
+    level_name = (os.environ.get("LOG_LEVEL") or "INFO").strip().upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+_configure_logging()
+logger = logging.getLogger(__name__)
+
 from excel_filter import (
     filter_xlsx_to_bytes,
     peek_distinct,
@@ -123,10 +140,17 @@ def llm_models():
     llm_api_key = (body.get("llm_api_key") or "").strip()
     if not llm_base_url:
         return jsonify({"error": "llm_base_url is required."}), 400
+    logger.info(
+        "POST /llm-models base_url=%r api_key_provided=%s",
+        llm_base_url,
+        bool(llm_api_key),
+    )
     try:
         models = fetch_model_ids(llm_base_url, llm_api_key)
+        logger.info("POST /llm-models ok model_count=%d", len(models))
         return jsonify({"models": models})
     except LlmExtractError as e:
+        logger.warning("POST /llm-models failed: %s", e)
         return jsonify({"error": str(e)}), 400
 
 
@@ -245,6 +269,7 @@ def extract():
                         }
                     )
                 except LlmExtractError as le:
+                    logger.warning("POST /extract LLM failed file=%r model=%r: %s", display_name, llm_model, le)
                     errors.append(f"{display_name}: {le}")
                     file_results.append(
                         {
