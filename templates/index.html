@@ -163,15 +163,20 @@
     .btn--accent:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(124, 58, 237, 0.35); }
     .btn--sm { padding: 8px 16px; font-size: 0.82rem; border-radius: 9px; }
 
-    /* Status */
-    #status { font-size: 0.88rem; margin-bottom: 16px; min-height: 20px; }
+    /* Status & outcome (bottom of converter — extract → preview → status) */
+    .converter-outcome {
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid #e2e8f0;
+    }
+    #status { font-size: 0.88rem; margin-top: 0; margin-bottom: 12px; min-height: 20px; }
     #status.error { color: #dc2626; }
     #status.ok { color: #16a34a; }
     #status.loading { color: #3b82f6; }
     #status.warning { color: #b45309; }
 
     /* Errors list */
-    #error-list { margin-bottom: 16px; }
+    #error-list { margin-bottom: 12px; }
     .error-item {
       background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b;
       border-radius: 7px; padding: 10px 14px; font-size: 0.82rem; margin: 4px 0;
@@ -180,7 +185,7 @@
     /* Extract — per-file template matching */
     .extract-summary {
       display: none;
-      margin-bottom: 16px;
+      margin-bottom: 0;
       border-radius: 10px;
       border: 1px solid #e2e8f0;
       background: var(--surface);
@@ -298,6 +303,21 @@
       font-size: 0.82rem;
       color: #64748b;
       font-variant-numeric: tabular-nums;
+    }
+    #status.loading .llm-live-progress {
+      margin-top: 8px;
+      font-size: 0.82rem;
+      color: #334155;
+      line-height: 1.45;
+      max-width: 640px;
+    }
+    #status.loading .llm-live-progress__line { font-weight: 650; color: #1e40af; }
+    #status.loading .llm-live-progress__sub {
+      margin-top: 4px;
+      font-weight: 500;
+      color: #475569;
+      font-size: 0.8rem;
+      word-break: break-word;
     }
     #status.loading .extract-progress__hint {
       margin-top: 6px;
@@ -468,10 +488,6 @@
       <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
     </div>
 
-    <div id="status"></div>
-    <div id="error-list"></div>
-    <div id="extract-summary" class="extract-summary" aria-live="polite"></div>
-
     <div id="panel-converter" class="tab-panel" role="tabpanel" aria-labelledby="tab-converter">
 
     <div id="drop-zone" class="drop-zone">
@@ -596,6 +612,12 @@
           <tbody id="preview-body"></tbody>
         </table>
       </div>
+    </div>
+
+    <div id="converter-outcome" class="converter-outcome" aria-live="polite">
+      <div id="status"></div>
+      <div id="error-list"></div>
+      <div id="extract-summary" class="extract-summary"></div>
     </div>
 
     </div><!-- panel-converter -->
@@ -1253,6 +1275,129 @@
       extractProgressTimer = setInterval(tick, 450);
     }
 
+    /** NDJSON /extract progress (LLM): section titles, row counts, file index */
+    let ndjsonProgressPayload = null;
+    function buildLlmLiveProgressInner(payload) {
+      if (!payload || !payload.step) return '';
+      const fname = payload.file
+        ? `<span style="color:#64748b">${esc(payload.file)}</span>`
+        : '';
+      switch (payload.step) {
+        case 'file_begin':
+          return (
+            `<div class="llm-live-progress__line">File ${esc(String(payload.index))}/${esc(String(payload.total_files))}</div>` +
+            `<div class="llm-live-progress__sub">${fname}</div>`
+          );
+        case 'sections_plan': {
+          const splitLabel =
+            payload.section_split === 'patterns' ? 'regex patterns' : 'markdown headings';
+          return (
+            `<div class="llm-live-progress__line">${esc(String(payload.total_sections))} section(s) · split by ${esc(splitLabel)}</div>` +
+            `<div class="llm-live-progress__sub">${fname}</div>`
+          );
+        }
+        case 'section_start':
+          return (
+            `<div class="llm-live-progress__line">Section ${esc(String(payload.index))}/${esc(String(payload.total))}</div>` +
+            `<div class="llm-live-progress__sub">${esc(payload.title || '')}</div>`
+          );
+        case 'section_done': {
+          const r = payload.rows_in_section ?? 0;
+          const det = r === 1 ? '1 test row in this section' : `${r} test rows in this section`;
+          const cum = payload.cumulative_rows ?? 0;
+          return (
+            `<div class="llm-live-progress__line">${esc(det)} · ${esc(String(cum))} total so far</div>` +
+            `<div class="llm-live-progress__sub">${fname}</div>`
+          );
+        }
+        case 'whole_llm':
+          if (payload.phase === 'request') {
+            return (
+              `<div class="llm-live-progress__line">Calling model (whole document)…</div>` +
+              `<div class="llm-live-progress__sub">${fname}</div>`
+            );
+          }
+          if (payload.phase === 'done') {
+            const n = payload.rows_found ?? 0;
+            return (
+              `<div class="llm-live-progress__line">Found ${esc(String(n))} test row(s)</div>` +
+              `<div class="llm-live-progress__sub">${fname}</div>`
+            );
+          }
+          return '';
+        default:
+          return '';
+      }
+    }
+
+    function setLlmLiveProgress(payload, elapsedMs, fileCount) {
+      const elapsed = formatExtractElapsed(elapsedMs);
+      const nf = fileCount === 1 ? '1 file' : `${fileCount} files`;
+      const meta = `${nf} · ${elapsed} elapsed`;
+      const phase = payload ? 'Extracting with LLM…' : 'Starting…';
+      const inner = payload ? `<div class="llm-live-progress">${buildLlmLiveProgressInner(payload)}</div>` : '';
+      setStatus(
+        '<div class="extract-progress" role="status" aria-live="polite" aria-busy="true">' +
+          '<span class="spinner" aria-hidden="true"></span>' +
+          '<div class="extract-progress__body">' +
+          `<div class="extract-progress__phase">${esc(phase)}</div>` +
+          `<div class="extract-progress__meta">${esc(meta)}</div>` +
+          inner +
+          '</div></div>',
+        'loading'
+      );
+    }
+
+    function startLlmNdjsonProgressTicker(fileCount, startedAt) {
+      stopExtractProgress();
+      ndjsonProgressPayload = null;
+      const tick = () => {
+        const elapsedMs = Date.now() - startedAt;
+        setLlmLiveProgress(ndjsonProgressPayload, elapsedMs, fileCount);
+      };
+      tick();
+      extractProgressTimer = setInterval(tick, 450);
+    }
+
+    async function readNdjsonExtract(resp, startedAt, fileCount) {
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let last = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        buf += dec.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buf.split('\n');
+        buf = lines.pop() || '';
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t) continue;
+          const o = JSON.parse(t);
+          if (o.type === 'progress') {
+            ndjsonProgressPayload = o.data;
+            setLlmLiveProgress(o.data, Date.now() - startedAt, fileCount);
+          } else if (o.type === 'result') {
+            last = o;
+          } else if (o.type === 'error') {
+            throw new Error(o.message || 'Extract failed');
+          }
+        }
+        if (done) break;
+      }
+      if (buf.trim()) {
+        const o = JSON.parse(buf.trim());
+        if (o.type === 'result') last = o;
+        else if (o.type === 'error') throw new Error(o.message || 'Extract failed');
+      }
+      if (!last || last.type !== 'result') throw new Error('Incomplete extraction stream');
+      return {
+        rows: last.rows,
+        errors: last.errors || [],
+        template: last.template,
+        file_results: last.file_results || [],
+      };
+    }
+
     function setStatus(msg, cls) { statusEl.className = cls || ''; statusEl.innerHTML = msg; }
     function clearStatus() {
       statusEl.innerHTML = '';
@@ -1354,7 +1499,17 @@
         document.getElementById('llm-document-scope').value === 'sections';
       const llmRegexSections =
         llmSectionScope && document.getElementById('llm-section-split').value === 'patterns';
-      startExtractProgress(extractMode, selectedFiles.length, llmSectionScope, llmRegexSections);
+      const startedAt = Date.now();
+      document.getElementById('converter-outcome')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+      const useLlmNdjson = extractMode === 'llm';
+      if (useLlmNdjson) {
+        form.append('llm_progress_stream', '1');
+        startLlmNdjsonProgressTicker(selectedFiles.length, startedAt);
+      } else {
+        startExtractProgress(extractMode, selectedFiles.length, llmSectionScope, llmRegexSections);
+      }
+
       form.append('mode', extractMode);
       if (extractMode === 'llm') {
         form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
@@ -1371,8 +1526,18 @@
 
       try {
         const resp = await fetch('/extract', { method: 'POST', body: form });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || 'Server error');
+        const streamHdr = resp.headers.get('X-Extract-Stream');
+        let data;
+        if (streamHdr === '1') {
+          if (!resp.ok) {
+            const errData = await resp.json().catch(() => ({}));
+            throw new Error(errData.error || 'Server error');
+          }
+          data = await readNdjsonExtract(resp, startedAt, selectedFiles.length);
+        } else {
+          data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Server error');
+        }
 
         extractedRows = data.rows || [];
         const errors = data.errors || [];
