@@ -1,1 +1,0 @@
-/Users/hanifm/work/lens-rag/docker-lab-guidelines.md

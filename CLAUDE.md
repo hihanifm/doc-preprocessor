@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Project guidance for human developers, **Claude Code**, **Cursor**, and other coding agents working in this repository.
 
 ## What this project does
 
-**Docs Garage** — local Flask app for tinkering with office files in one place: extract structured rows (including test cases) from **`.docx`** or **digital `.pdf`** via template extractors, filter and preview in the UI, export `.xlsx`, and shrink huge spreadsheets with column filters before download.
+**Docs Garage** — local Flask app for tinkering with office files in one place: extract structured rows (including test cases) from **`.docx`** or **digital `.pdf`** via template extractors, filter and preview in the UI, export **`.xlsx`**, and shrink huge spreadsheets with column filters before download.
 
 **PDF notes:** Only PDFs with an **extractable text layer** are supported. **OCR is not supported** (scanned PDFs usually yield no text). Tables are detected heuristically (`pdfplumber`) and rendered as pipe-delimited lines similar to Word output; messy layouts may need PDF-specific extractors or reader tuning.
 
@@ -41,6 +41,21 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+This repository does **not** check in a virtualenv (`.venv/` is gitignored). **Do not commit or push `.venv`** — it is machine-specific, large, and reproducible from [`requirements.txt`](requirements.txt).
+
+**Agents and CI-style environments:** create `.venv` if missing, **activate** it, then use `pip` / `python` so dependencies install into the venv, not the system interpreter.
+
+1. From the repo root: `python3 -m venv .venv` (or `python -m venv .venv` on Windows).
+2. Activate, then install:
+   - Unix/macOS: `source .venv/bin/activate && pip install -r requirements.txt`
+   - Windows: run `.venv\Scripts\activate` then `pip install -r requirements.txt`
+
+Prefer **`./start.sh`** (Unix) or **`start.bat`** / **`start_lan.bat`** (Windows) when you just need to run the app — they create `.venv` when needed and install deps first.
+
+## Extractors
+
+When adding or changing extractors, follow **[`extractors/SKILL.md`](extractors/SKILL.md)**.
+
 ## Architecture
 
 The document pipeline is linear — upload → normalize to plain text → pick extractor → rows → Excel:
@@ -63,6 +78,6 @@ The document pipeline is linear — upload → normalize to plain text → pick 
    - `GET /samples/<path>` — static sample files
    - Excel shrinker routes under `/excel/…`
 
-6. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`).
+6. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`). Default columns include **`steps_expected`** (flattened procedure-table text) instead of separate steps vs expected columns.
 
 The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step.

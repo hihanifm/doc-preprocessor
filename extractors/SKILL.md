@@ -50,10 +50,9 @@ Each row dict should include these keys (strings; empty string if missing):
 | `test_name` | Human-readable title. |
 | `description` | Free text. |
 | `preconditions` | Preconditions / applicability. |
-| `steps` | Steps or actions. |
-| `expected_results` | Expected results / outcomes. |
+| `steps_expected` | Procedure / steps / expected content: **flattened table text** (full pipe rows preserved, one string). Avoid splitting odd table layouts into separate steps vs expected columns unless you implement a different extractor contract. |
 
-The Excel exporter (`exporter.py`) expects exactly this set. Missing keys become blank cells.
+The Excel exporter (`exporter.py`) expects exactly this set for the shipped template. Missing keys become blank cells.
 
 ## Given a new document — agent checklist
 
@@ -61,7 +60,7 @@ The Excel exporter (`exporter.py`) expects exactly this set. Missing keys become
 2. Print **`read_document`** output; note:
    - How test cases are **bounded** (e.g. `##` headings, numbered sections).
    - Where **IDs** live (heading suffix, table column, paragraph).
-   - How **steps / expected** appear (one table vs two, column headers, merged cells flattened to text).
+   - How **procedure tables** appear (pipe rows); the reference extractor folds matching tables into **`steps_expected`** without parsing columns.
 3. Draft **`matches`**: return `True` only when those signatures appear together.
 4. Draft **`extract`**: split `doc_text` into sections; for each test case, fill the row dict.
 5. Add **`name`** on the class (human-readable, shown in UI as the matched template).
@@ -69,7 +68,7 @@ The Excel exporter (`exporter.py`) expects exactly this set. Missing keys become
 
 ## Reference implementation
 
-- **`extractors/user_management.py`** — underscore-style TC IDs in `##` headings, tables for steps/expected, two layout variants (works on **`samples/sample_test_plan.docx`** and **`samples/sample_test_plan.pdf`** when the emitted text matches).
+- **`extractors/user_management.py`** — underscore-style TC IDs in `##` headings; procedure-like pipe tables flattened into **`steps_expected`** (works on **`samples/sample_test_plan.docx`** and **`samples/sample_test_plan.pdf`** when the emitted text matches).
 - **`samples/README.md`** — short “how to add a format” blurb.
 
 ## When extraction returns zero rows but `matches` is true

@@ -18,3 +18,6 @@ support_uploads/
 *.docx
 !samples/*.docx
 !static/*.docx
+
+# Symlink to /work/guidelines (shared guidelines folder, not part of this repo)
+.guidelines
