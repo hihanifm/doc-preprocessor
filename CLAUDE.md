@@ -44,7 +44,7 @@ On the **Test case extractor** tab you can choose **LLM (OpenAI-compatible)** in
 - **Streaming:** UI **Streaming (SSE)** — **Auto** (omit form field `llm_stream`) uses **`LLM_STREAM`** for whole-file extract (default on) and **`LLM_STREAM_SECTIONS`** for section mode (default off). **Always stream** / **Never stream** send `llm_stream=1` or `0`. If streaming returns empty content, the server falls back to a non-streaming completion.
 - **Debug file:** set **`LLM_IO_LOG_PATH`** (e.g. `llm_io.log`) to append structured request/response records for **extract** calls only (not `/llm-models`). API keys are not written verbatim (`Bearer <redacted>`).
 - **Section mode:** **`llm_document_scope`** (`whole` \| `sections`). When `sections`, also **`llm_section_split`**: **`headings`** (default) uses **`llm_heading_level`** (`auto` \| `1`–`6`) on markdown heading lines (`#` … `######`; **Auto** = shallowest level present); **`patterns`** uses **`llm_section_regex_hints`** — one Python regex per line (comment lines start with `#`), each match on a trimmed line starts a new section — useful when titles carry ids like `x_y_z`. Regex mode requires non-empty hints; if nothing matches, the whole file is one section (warning in logs). Optional **`llm_user_hints`** (short text, capped server-side) is prefixed into the model prompt for id/title conventions. PDFs often lack `#` lines — try regex split or whole file.
-- Output rows match [`exporter.py`](exporter.py) columns (including **`steps_expected`**). Implementation: [`llm_extractor.py`](llm_extractor.py).
+- Output rows match [`exporter.py`](exporter.py) columns (including **`procedure_steps`** and **`expected_results`** for LLM). Implementation: [`llm_extractor.py`](llm_extractor.py). Template extractors may still emit legacy **`steps_expected`** until updated — that key is not a workbook column; **Procedure** and **Expected** cells stay empty for template mode until those extractors are migrated.
 
 ## Installing dependencies
 
@@ -94,6 +94,6 @@ The document pipeline is linear — upload → normalize to plain text → pick 
    - `GET /samples/<path>` — static sample files
    - Excel shrinker routes under `/excel/…`
 
-7. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`). Default columns include **`steps_expected`** (flattened procedure-table text) instead of separate steps vs expected columns.
+7. **`exporter.py`** — builds the workbook from row dicts (`openpyxl`). Columns include **`procedure_steps`** and **`expected_results`**. Template-based rows may omit them until extractors are updated.
 
 The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step.

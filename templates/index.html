@@ -607,7 +607,8 @@
               <th>Test Name</th>
               <th>Description</th>
               <th>Preconditions / Applicability</th>
-              <th>Steps &amp; Expected (table text)</th>
+              <th>Procedure / steps</th>
+              <th>Expected results</th>
             </tr>
           </thead>
           <tbody id="preview-body"></tbody>
@@ -676,7 +677,7 @@
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    const COL_KEYS = ['file_name','test_id','test_name','description','preconditions','steps_expected'];
+    const COL_KEYS = ['file_name','test_id','test_name','description','preconditions','procedure_steps','expected_results'];
     const PREVIEW_MAX = 200;
     const SUBTITLE_CONVERTER =
       'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';

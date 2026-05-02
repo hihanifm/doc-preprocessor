@@ -11,12 +11,13 @@ COLUMNS = [
     ("test_name", "Test Name"),
     ("description", "Description"),
     ("preconditions", "Preconditions / Applicability"),
-    ("steps_expected", "Steps & Expected (table text)"),
+    ("procedure_steps", "Procedure / steps"),
+    ("expected_results", "Expected results"),
 ]
 
 HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
-WRAP_COLS = {"description", "preconditions", "steps_expected"}
+WRAP_COLS = {"description", "preconditions", "procedure_steps", "expected_results"}
 
 
 def to_excel(rows: List[dict]) -> bytes:
@@ -51,7 +52,8 @@ def to_excel(rows: List[dict]) -> bytes:
         "test_name": 35,
         "description": 50,
         "preconditions": 40,
-        "steps_expected": 75,
+        "procedure_steps": 50,
+        "expected_results": 50,
     }
     for col_idx, (key, _) in enumerate(COLUMNS, start=1):
         ws.column_dimensions[

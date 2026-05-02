@@ -41,14 +41,16 @@ _SYSTEM_PROMPT = """You extract software test cases from plain-text documents (W
 Respond with ONLY valid JSON — no markdown fences, no commentary.
 
 Exact shape:
-{"test_cases":[{"file_name":"","test_id":"","test_name":"","description":"","preconditions":"","steps_expected":""}]}
+{"test_cases":[{"file_name":"","test_id":"","test_name":"","description":"","preconditions":"","procedure_steps":"","expected_results":""}]}
 
 Rules:
 - test_cases is an array; use [] if nothing qualifies.
 - All values are strings (use "" if unknown).
 - If the user message includes "User hints about identifiers", use them to recognize test ids (e.g. tokens like x_y_z) in titles and text.
 - If the user message includes "Section: …", only extract test cases from that section's body (it is part of a larger document sent in multiple requests).
-- steps_expected: put procedure steps, actions, AND expected results / outcomes together in one field (plain text or multi-line). Do not split into separate columns.
+- procedure_steps: actions, navigation, inputs, and procedure text only (steps, numbered lists, table "Step" / "Action" columns).
+- expected_results: expected outcomes, pass criteria, and table "Expected" / "Expected result" columns — not mixed into procedure_steps when the document separates them.
+- If the document only provides a single combined procedure table, put row-aligned step lines in procedure_steps and matching expected lines in expected_results when columns exist; if truly inseparable, put the block in procedure_steps and use "" for expected_results.
 - Map headings, numbered sections, and tables into logical test cases when possible.
 - test_id: short stable id if the document has one (e.g. TC_001); else synthesize from context or use empty string.
 - file_name: echo the filename hint from the user message when unsure.
@@ -202,20 +204,10 @@ def _coerce_str(v: Any) -> str:
 
 
 def _normalize_case(raw: dict[str, Any], file_name: str) -> dict[str, str]:
-    steps_expected = _coerce_str(raw.get("steps_expected"))
-    if not steps_expected:
-        s = _coerce_str(raw.get("steps"))
-        e = _coerce_str(raw.get("expected_results"))
-        parts = [x for x in (s, e) if x]
-        if parts:
-            steps_expected = "\n\n".join(parts)
-
     out: dict[str, str] = {}
     for key in _ROW_KEYS:
         if key == "file_name":
             out[key] = _coerce_str(raw.get("file_name")) or file_name
-        elif key == "steps_expected":
-            out[key] = steps_expected
         else:
             out[key] = _coerce_str(raw.get(key))
     return out
