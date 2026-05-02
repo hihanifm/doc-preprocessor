@@ -912,7 +912,15 @@
                   : 'sections';
             secHint = `<span class="extract-summary-row--trunc" style="color:#0369a1;">Section mode (${via}): ${esc(String(fr.llm_section_calls))} model request(s).</span>`;
           }
-          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${secHint}${truncHint}</div>`;
+          let prepHint = '';
+          if (fr.llm_prep_removed_headings && fr.llm_prep_removed_headings.length) {
+            const heads = fr.llm_prep_removed_headings.map(h => esc(String(h))).join(', ');
+            prepHint =
+              `<span class="extract-summary-row--trunc" style="color:#0f766e;">Before LLM: skipped heading section(s): ${heads}` +
+              (fr.llm_prep_fallback_original ? ' (nothing left after skip — used full text).' : '.') +
+              '</span>';
+          }
+          return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${secHint}${truncHint}${prepHint}</div>`;
         }
         if (fr.reason === 'no_template') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples). You can also use <strong>Save for developer</strong> above to store this file on the server.</div>`;

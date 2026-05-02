@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 LIST_MODELS_TIMEOUT_SEC = 30
 
 from exporter import COLUMNS
+from llm_document_filter import prepare_text_for_llm
 
 log = logging.getLogger(__name__)
 
@@ -754,12 +755,23 @@ def extract_with_llm(
 
     Streaming: if stream is None, whole-file extraction follows LLM_STREAM (default on); section mode follows
     LLM_STREAM_SECTIONS (default off). Pass True/False to force.
+
+    Boilerplate sections (TOC, introduction, revision history, etc.) are dropped when they appear
+    as markdown heading lines — see llm_document_filter.prepare_text_for_llm.
     """
+    doc_text, prep_meta = prepare_text_for_llm(doc_text)
+    if prep_meta.get("llm_prep_stripped"):
+        log.info(
+            "LLM prep removed boilerplate heading section(s) for %r: %s",
+            file_name,
+            prep_meta.get("llm_prep_removed_headings"),
+        )
+
     uh = (user_hints or "").strip()
     ds = (document_scope or "whole").strip().lower()
     use_stream = _resolve_stream(document_scope, stream)
     if ds == "sections":
-        return extract_with_llm_by_sections(
+        rows, meta = extract_with_llm_by_sections(
             doc_text,
             base_url=base_url,
             api_key=api_key,
@@ -773,7 +785,9 @@ def extract_with_llm(
             user_hints=uh,
             progress=progress,
         )
-    return _extract_with_llm_single_pass(
+        meta.update(prep_meta)
+        return rows, meta
+    rows, meta = _extract_with_llm_single_pass(
         doc_text,
         base_url=base_url,
         api_key=api_key,
@@ -785,6 +799,8 @@ def extract_with_llm(
         user_hints=uh or None,
         progress=progress,
     )
+    meta.update(prep_meta)
+    return rows, meta
 
 
 def validate_llm_form(base_url: str, api_key: str, model: str) -> str | None:

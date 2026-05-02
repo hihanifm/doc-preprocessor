@@ -231,6 +231,10 @@ def _extract_core(
                         fr_ok["llm_heading_level_used"] = llm_doc_meta.get("llm_heading_level_used")
                     if llm_doc_meta.get("llm_pattern_count") is not None:
                         fr_ok["llm_pattern_count"] = llm_doc_meta.get("llm_pattern_count")
+                    if llm_doc_meta.get("llm_prep_removed_headings"):
+                        fr_ok["llm_prep_removed_headings"] = llm_doc_meta.get("llm_prep_removed_headings")
+                    if llm_doc_meta.get("llm_prep_fallback_original"):
+                        fr_ok["llm_prep_fallback_original"] = True
                 file_results.append(fr_ok)
                 continue
 
