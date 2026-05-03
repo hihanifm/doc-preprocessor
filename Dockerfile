@@ -24,11 +24,20 @@ ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
 COPY requirements.txt .
 COPY pip-cache/ /pip-cache/
 
-# Install from local pip-cache first (offline/proxy-safe); fall back to PyPI with trusted-host for lab proxies
-RUN pip install --no-cache-dir --find-links /pip-cache/ -r requirements.txt \
+# Install from local pip-cache first (offline/proxy-safe); both paths may still hit PyPI for deps.
+# Broad --trusted-host list for lab MITM / proxy SSL issues (same index + redirects + file CDN).
+RUN pip install --no-cache-dir \
+        --trusted-host pypi.org \
+        --trusted-host www.pypi.org \
+        --trusted-host pypi.python.org \
+        --trusted-host pypi.io \
+        --trusted-host files.pythonhosted.org \
+        --find-links /pip-cache/ -r requirements.txt \
     || pip install --no-cache-dir \
         --trusted-host pypi.org \
+        --trusted-host www.pypi.org \
         --trusted-host pypi.python.org \
+        --trusted-host pypi.io \
         --trusted-host files.pythonhosted.org \
         -r requirements.txt
 
