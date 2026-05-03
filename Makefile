@@ -122,20 +122,61 @@ run-lan:
 	@. .venv/bin/activate && python app.py --host 0.0.0.0
 
 # ── Diagnostics: confirm daemon proxy + smoke-test image pulls ──────────────
-# Run before `make dev` when builds fail with proxy/registry errors. The base-image
-# pull uses the same daemon proxy that compose builds rely on.
+# Run before `make dev` when builds fail with proxy/registry errors. Walks the
+# three proxy layers (shell / build args / daemon — see refs/docker-lab-guidelines.md)
+# and runs an isolated curl + docker pull so you know which layer is broken.
+# Passwords are redacted in printed URLs (USER:PASS@ → USER:<redacted>@).
 doctor:
-	@echo "── Daemon proxy + registry config ──"
-	@docker info 2>/dev/null | grep -iE 'proxy|registry' || echo "  (no proxy fields in 'docker info' — daemon is not configured for proxy)"
+	@echo "── 1. Daemon runtime proxy (from 'docker info') ──"
+	@out=$$(docker info 2>/dev/null | grep -iE 'proxy|registry' || true); \
+	 if [ -z "$$out" ]; then echo "  (no proxy fields in 'docker info' — daemon is not configured for proxy)"; \
+	 else echo "$$out" | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g'; fi
 	@echo ""
-	@echo "── Shell proxy (used by compose substitution) ──"
-	@env | grep -iE '^(http|https|no|all|ftp)_proxy=' || echo "  (no *_PROXY set in shell)"
+	@echo "── 2. systemd drop-in: /etc/systemd/system/docker.service.d/http-proxy.conf ──"
+	@if [ -r /etc/systemd/system/docker.service.d/http-proxy.conf ]; then \
+	  sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g' /etc/systemd/system/docker.service.d/http-proxy.conf; \
+	else \
+	  echo "  (file not found or unreadable — daemon proxy not set this way, or run with sudo to read)"; \
+	fi
 	@echo ""
-	@echo "── Pull test (base image) ──"
+	@echo "── 3. systemctl Environment for docker.service (what systemd actually loaded) ──"
+	@if command -v systemctl >/dev/null 2>&1; then \
+	  systemctl show --property=Environment docker 2>/dev/null | tr ' ' '\n' \
+	    | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g' \
+	    | grep -iE '^(Environment|HTTP|HTTPS|NO|ALL|FTP)' || echo "  (no proxy in systemd Environment — daemon-reload + restart needed after editing the drop-in?)"; \
+	else \
+	  echo "  (systemctl not present — non-systemd host)"; \
+	fi
+	@echo ""
+	@echo "── 4. Shell proxy (used by compose substitution into build args + runtime) ──"
+	@out=$$(env | grep -iE '^(http|https|no|all|ftp)_proxy=' || true); \
+	 if [ -z "$$out" ]; then echo "  (no *_PROXY set in shell)"; \
+	 else echo "$$out" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'; fi
+	@echo ""
+	@echo "── 5. Curl proxy auth test (host → proxy → public.ecr.aws) ──"
+	@if [ -n "$${HTTPS_PROXY}$${https_proxy}$${HTTP_PROXY}$${http_proxy}" ] && command -v curl >/dev/null 2>&1; then \
+	  proxy="$${HTTPS_PROXY:-$${https_proxy:-$${HTTP_PROXY:-$$http_proxy}}}"; \
+	  echo "  using proxy: $$(echo $$proxy | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g')"; \
+	  curl --max-time 10 -sS -o /dev/null -w "  HTTP %{http_code}  total=%{time_total}s\n" \
+	    -x "$$proxy" https://public.ecr.aws/v2/ \
+	    || echo "  (curl through proxy failed — bad creds, wrong host:port, or proxy unreachable)"; \
+	else \
+	  echo "  (skipped: no shell proxy set, or curl not installed)"; \
+	fi
+	@echo ""
+	@echo "── 6. Pull test (base image — what 'make dev' actually needs) ──"
 	@docker pull $${PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.12-slim}
 	@echo ""
-	@echo "── Pull test (DH frontend; only relevant if a Dockerfile re-adds '# syntax=...') ──"
+	@echo "── 7. Pull test (DH BuildKit frontend; only relevant if a Dockerfile re-adds '# syntax=...') ──"
 	@docker pull docker.io/docker/dockerfile:1 || echo "  (failure here is harmless — this repo's Dockerfile no longer needs it)"
+	@echo ""
+	@echo "── URL-encode special chars in proxy passwords ──"
+	@echo "  ! = %21   @ = %40   : = %3A   # = %23   / = %2F   ? = %3F   space = %20"
+	@echo ""
+	@echo "If layer 6 fails with 401: fix /etc/systemd/system/docker.service.d/http-proxy.conf,"
+	@echo "then 'sudo systemctl daemon-reload && sudo systemctl restart docker'."
+	@echo "If layer 5 fails but layer 6 works: shell creds are wrong (encoding?). Compose builds"
+	@echo "will still pull but 'pip install' inside the build may fail."
 
 # ── pip-cache (offline-friendly Docker builds) ───────────────────────────────
 pip-cache:
