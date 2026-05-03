@@ -82,8 +82,21 @@ docker pull public.ecr.aws/docker/library/python:3.12-slim       # smoke test
 
 ### Make targets
 
-- `make doctor` — prints daemon proxy config (Layer 3), shell proxy (Layer 1), then runs `docker pull` smoke tests for the base image and the legacy DH BuildKit frontend. Run this first when builds fail with proxy/registry errors.
+- `make doctor` — walks all three layers: prints `docker info` proxy fields, the systemd drop-in file contents (redacted), `systemctl show` Environment, the shell proxy, an isolated `curl --proxy "$HTTP_PROXY" public.ecr.aws/v2/` test, and finally a `docker pull` smoke test for the base image. Passwords are redacted in printed URLs (`USER:<redacted>@host`). Run this first when builds fail.
+- `make daemon-proxy` — writes `/etc/systemd/system/docker.service.d/http-proxy.conf` from your current shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, reloads systemd, and restarts Docker. Idempotent (no-op if config already matches). Requires `sudo` and `systemctl`. The conf file is written `0600` because it contains the proxy password in cleartext — URL-encode special chars before exporting.
+- `make daemon-proxy-clear` — removes the drop-in and restarts Docker (back to direct egress).
 - `make dev` — by default passes shell proxy through to compose (Layer 1 → Layer 2). Set `NO_DOCKER_PROXY=1` to force-clear (rare; only useful when daemon proxy is mis-auth'd *and* the registry is reachable directly).
+
+#### Typical first-time setup on a Linux box behind a corporate proxy
+
+```bash
+export HTTP_PROXY="http://USER:PASSWORD@proxy-host:4433"   # URL-encode special chars
+export HTTPS_PROXY="$HTTP_PROXY"
+export NO_PROXY="localhost,127.0.0.1,::1,host.docker.internal,.corp.samsungelectronics.net"
+make daemon-proxy   # writes systemd drop-in, restarts dockerd (sudo)
+make doctor         # verify all 7 layers
+make dev            # build + run
+```
 
 ### Symptoms → fix cheatsheet
 

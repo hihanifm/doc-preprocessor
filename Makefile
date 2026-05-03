@@ -15,7 +15,7 @@ COMPOSE := $(DOCKER_COMPOSE_ENV) docker compose
 # Single Flask service; ports from docker-compose.yml (prod :5000, dev host :35050).
 .PHONY: help up down down-all build rebuild restart logs logs-dev ps dev e2e-up \
 	prod prod-down down-prod build-prod logs-prod \
-	run run-lan pip-cache build-dev doctor
+	run run-lan pip-cache build-dev doctor daemon-proxy daemon-proxy-clear
 
 help:
 	@echo ""
@@ -54,6 +54,8 @@ help:
 	@echo "    Default: shell HTTP(S)_PROXY is passed through to compose. Set NO_DOCKER_PROXY=1"
 	@echo "    to force-clear. Daemon-level proxy (systemd) governs 'docker pull'; see"
 	@echo "    refs/docker-lab-guidelines.md for the three-layer setup."
+	@echo "    make daemon-proxy        Write /etc/systemd/.../http-proxy.conf from \$$HTTP_PROXY (sudo)"
+	@echo "    make daemon-proxy-clear  Remove daemon proxy drop-in and restart Docker (sudo)"
 	@echo ""
 
 # ── Dev (profile dev, service app-dev) ─────────────────────────────────────────
@@ -173,10 +175,76 @@ doctor:
 	@echo "── URL-encode special chars in proxy passwords ──"
 	@echo "  ! = %21   @ = %40   : = %3A   # = %23   / = %2F   ? = %3F   space = %20"
 	@echo ""
-	@echo "If layer 6 fails with 401: fix /etc/systemd/system/docker.service.d/http-proxy.conf,"
-	@echo "then 'sudo systemctl daemon-reload && sudo systemctl restart docker'."
+	@echo "If layer 6 fails with 401: run 'make daemon-proxy' to write the systemd drop-in"
+	@echo "from your shell HTTP_PROXY (or fix it manually). 'make daemon-proxy-clear' removes it."
 	@echo "If layer 5 fails but layer 6 works: shell creds are wrong (encoding?). Compose builds"
 	@echo "will still pull but 'pip install' inside the build may fail."
+
+# ── Daemon proxy: write systemd drop-in from current shell HTTP_PROXY ───────
+# Required for Linux corporate-proxy users — the Docker daemon does NOT inherit
+# proxy from the user shell. Without this, 'docker pull' goes through any
+# transparent intercepting proxy unauthenticated and 401s. Idempotent: rewrites
+# the drop-in only when contents differ; restarts Docker only if needed.
+# Requires sudo + systemd; the conf file is written 0600 because it contains the
+# proxy password in cleartext (URL-encode special chars: ! -> %21, @ -> %40, etc).
+daemon-proxy:
+	@if ! command -v systemctl >/dev/null 2>&1; then \
+	  echo "Error: systemctl not found. Linux/systemd-only target."; \
+	  echo "On Docker Desktop (macOS/Windows) configure Settings -> Resources -> Proxies."; \
+	  exit 1; \
+	fi
+	@if [ -z "$$HTTP_PROXY$$http_proxy$$HTTPS_PROXY$$https_proxy" ]; then \
+	  echo "Error: HTTP_PROXY (or http_proxy / HTTPS_PROXY / https_proxy) is not set."; \
+	  echo "Export it in this shell, then re-run 'make daemon-proxy'. Example:"; \
+	  echo "  export HTTP_PROXY=\"http://USER:PASSWORD@proxy-host:4433\""; \
+	  echo "  export HTTPS_PROXY=\"\$$HTTP_PROXY\""; \
+	  exit 1; \
+	fi
+	@H="$${HTTP_PROXY:-$$http_proxy}"; \
+	 S="$${HTTPS_PROXY:-$${https_proxy:-$$H}}"; \
+	 N="$${NO_PROXY:-$${no_proxy:-localhost,127.0.0.1,::1,host.docker.internal}}"; \
+	 redacted_h=$$(echo "$$H" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'); \
+	 redacted_s=$$(echo "$$S" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'); \
+	 echo "Proposed daemon proxy:"; \
+	 echo "  HTTP_PROXY=$$redacted_h"; \
+	 echo "  HTTPS_PROXY=$$redacted_s"; \
+	 echo "  NO_PROXY=$$N"; \
+	 echo ""; \
+	 tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
+	 printf '[Service]\nEnvironment="HTTP_PROXY=%s"\nEnvironment="HTTPS_PROXY=%s"\nEnvironment="NO_PROXY=%s"\n' "$$H" "$$S" "$$N" > $$tmp; \
+	 conf=/etc/systemd/system/docker.service.d/http-proxy.conf; \
+	 if [ -f $$conf ] && sudo cmp -s $$tmp $$conf 2>/dev/null; then \
+	   echo "Daemon proxy already up to date — no restart needed."; \
+	   echo "Run 'make doctor' to verify."; \
+	   exit 0; \
+	 fi; \
+	 echo "Writing $$conf (sudo will prompt)..."; \
+	 sudo mkdir -p /etc/systemd/system/docker.service.d; \
+	 sudo install -m 0600 -o root -g root $$tmp $$conf; \
+	 echo "Reloading systemd + restarting Docker daemon (running containers will be stopped)..."; \
+	 sudo systemctl daemon-reload; \
+	 sudo systemctl restart docker; \
+	 echo ""; \
+	 echo "Loaded by daemon:"; \
+	 docker info 2>/dev/null | grep -iE 'proxy' \
+	   | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g' \
+	   || echo "  (no proxy in 'docker info' — check 'sudo systemctl status docker')"; \
+	 echo ""; \
+	 echo "Next: 'make doctor' to confirm a base-image pull works."
+
+daemon-proxy-clear:
+	@conf=/etc/systemd/system/docker.service.d/http-proxy.conf; \
+	 if [ ! -f $$conf ]; then \
+	   echo "$$conf not present — nothing to remove."; \
+	   exit 0; \
+	 fi; \
+	 echo "Removing $$conf (sudo will prompt) and restarting Docker..."; \
+	 sudo rm -f $$conf; \
+	 sudo systemctl daemon-reload; \
+	 sudo systemctl restart docker; \
+	 echo ""; \
+	 docker info 2>/dev/null | grep -iE 'proxy' \
+	   || echo "  (no proxy in 'docker info' — daemon is back to direct egress)"
 
 # ── pip-cache (offline-friendly Docker builds) ───────────────────────────────
 pip-cache:
