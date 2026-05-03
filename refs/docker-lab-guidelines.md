@@ -39,3 +39,5 @@ Lab networks sometimes require an HTTP proxy for `docker build` / `pip install`.
 **Base image:** build arg `PYTHON_IMAGE` defaults to AWS Public ECR’s `python:3.12-slim` mirror (many labs block Docker Hub). Override if your registry policy requires it.
 
 **TLS:** drop corporate root `.crt` files under `certs/` in the repo root; the Dockerfile installs them into the image so `pip` and Python `requests` trust your lab’s TLS interception.
+
+**Proxy vs slim image:** without a proxy you may not be able to pull `FROM python:…`; with a proxy, pulls work but repeated `pip install` through the proxy is painful. The Dockerfile uses a **BuildKit cache mount** on `/root/.cache/pip` so **rebuilds reuse downloaded wheels** on the Docker host without stuffing the cache into image layers. Use **BuildKit** (on by default in Docker Desktop / Compose v2; set `DOCKER_BUILDKIT=1` on older Linux). For fully **offline** builds, use `make pip-cache` and a populated `pip-cache/` so the first `pip install` line can install with little or no PyPI traffic.

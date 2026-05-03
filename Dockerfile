@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+#
 # Default: AWS Public ECR mirror of Docker Official Images (many labs block Docker Hub).
 # Override: PYTHON_IMAGE=docker.io/library/python:3.12-slim
 ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.12-slim
@@ -26,14 +28,18 @@ COPY pip-cache/ /pip-cache/
 
 # Install from local pip-cache first (offline/proxy-safe); both paths may still hit PyPI for deps.
 # Broad --trusted-host list for lab MITM / proxy SSL issues (same index + redirects + file CDN).
-RUN pip install --no-cache-dir \
+#
+# BuildKit cache mount: pip reuses wheels between builds on this machine (great behind slow proxies)
+# without baking ~/.cache/pip into the image (--no-cache-dir alone forces re-download every build).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
         --trusted-host pypi.org \
         --trusted-host www.pypi.org \
         --trusted-host pypi.python.org \
         --trusted-host pypi.io \
         --trusted-host files.pythonhosted.org \
         --find-links /pip-cache/ -r requirements.txt \
-    || pip install --no-cache-dir \
+    || pip install \
         --trusted-host pypi.org \
         --trusted-host www.pypi.org \
         --trusted-host pypi.python.org \
