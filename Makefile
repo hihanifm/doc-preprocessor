@@ -134,28 +134,42 @@ doctor:
 	 if [ -z "$$out" ]; then echo "  (no proxy fields in 'docker info' — daemon is not configured for proxy)"; \
 	 else echo "$$out" | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g'; fi
 	@echo ""
-	@echo "── 2. systemd drop-in: /etc/systemd/system/docker.service.d/http-proxy.conf ──"
-	@if [ -r /etc/systemd/system/docker.service.d/http-proxy.conf ]; then \
-	  sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g' /etc/systemd/system/docker.service.d/http-proxy.conf; \
-	else \
-	  echo "  (file not found or unreadable — daemon proxy not set this way, or run with sudo to read)"; \
-	fi
-	@echo ""
-	@echo "── 3. systemctl Environment for docker.service (what systemd actually loaded) ──"
-	@if command -v systemctl >/dev/null 2>&1; then \
+	@echo "── 2. Docker install type + config source ──"
+	@if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then \
+	  echo "  Install: snap (config via 'snap set docker http-proxy=...')"; \
+	  for k in http-proxy https-proxy no-proxy; do \
+	    v=$$(sudo snap get docker $$k 2>/dev/null || echo ""); \
+	    if [ -n "$$v" ]; then \
+	      echo "    $$k = $$(echo "$$v" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g')"; \
+	    else \
+	      echo "    $$k = (unset)"; \
+	    fi; \
+	  done; \
+	elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files docker.service >/dev/null 2>&1; then \
+	  echo "  Install: native systemd ('docker.service')"; \
+	  conf=/etc/systemd/system/docker.service.d/http-proxy.conf; \
+	  if [ -r $$conf ]; then \
+	    echo "  Drop-in $$conf:"; \
+	    sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g' $$conf | sed 's/^/    /'; \
+	  else \
+	    echo "  Drop-in $$conf: (not present — run 'make daemon-proxy' to create)"; \
+	  fi; \
+	  echo "  systemctl Environment:"; \
 	  systemctl show --property=Environment docker 2>/dev/null | tr ' ' '\n' \
 	    | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g' \
-	    | grep -iE '^(Environment|HTTP|HTTPS|NO|ALL|FTP)' || echo "  (no proxy in systemd Environment — daemon-reload + restart needed after editing the drop-in?)"; \
+	    | grep -iE '^(HTTP|HTTPS|NO|ALL|FTP)' | sed 's/^/    /' \
+	    || echo "    (no proxy in Environment — did you 'systemctl daemon-reload' + restart?)"; \
 	else \
-	  echo "  (systemctl not present — non-systemd host)"; \
+	  echo "  Install: unknown (not snap, no docker.service unit). Could be Docker Desktop,"; \
+	  echo "    rootless, or a remote context. Try: docker context ls"; \
 	fi
 	@echo ""
-	@echo "── 4. Shell proxy (used by compose substitution into build args + runtime) ──"
+	@echo "── 3. Shell proxy (used by compose substitution into build args + runtime) ──"
 	@out=$$(env | grep -iE '^(http|https|no|all|ftp)_proxy=' || true); \
 	 if [ -z "$$out" ]; then echo "  (no *_PROXY set in shell)"; \
 	 else echo "$$out" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'; fi
 	@echo ""
-	@echo "── 5. Curl proxy auth test (host → proxy → public.ecr.aws) ──"
+	@echo "── 4. Curl proxy auth test (host → proxy → public.ecr.aws) ──"
 	@if [ -n "$${HTTPS_PROXY}$${https_proxy}$${HTTP_PROXY}$${http_proxy}" ] && command -v curl >/dev/null 2>&1; then \
 	  proxy="$${HTTPS_PROXY:-$${https_proxy:-$${HTTP_PROXY:-$$http_proxy}}}"; \
 	  echo "  using proxy: $$(echo $$proxy | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g')"; \
@@ -166,33 +180,33 @@ doctor:
 	  echo "  (skipped: no shell proxy set, or curl not installed)"; \
 	fi
 	@echo ""
-	@echo "── 6. Pull test (base image — what 'make dev' actually needs) ──"
+	@echo "── 5. Pull test (base image — what 'make dev' actually needs) ──"
 	@docker pull $${PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.12-slim}
 	@echo ""
-	@echo "── 7. Pull test (DH BuildKit frontend; only relevant if a Dockerfile re-adds '# syntax=...') ──"
+	@echo "── 6. Pull test (DH BuildKit frontend; only relevant if a Dockerfile re-adds '# syntax=...') ──"
 	@docker pull docker.io/docker/dockerfile:1 || echo "  (failure here is harmless — this repo's Dockerfile no longer needs it)"
 	@echo ""
 	@echo "── URL-encode special chars in proxy passwords ──"
 	@echo "  ! = %21   @ = %40   : = %3A   # = %23   / = %2F   ? = %3F   space = %20"
 	@echo ""
-	@echo "If layer 6 fails with 401: run 'make daemon-proxy' to write the systemd drop-in"
-	@echo "from your shell HTTP_PROXY (or fix it manually). 'make daemon-proxy-clear' removes it."
-	@echo "If layer 5 fails but layer 6 works: shell creds are wrong (encoding?). Compose builds"
+	@echo "If layer 5 (or 1) shows no proxy + pull 401s: run 'make daemon-proxy' to set the"
+	@echo "daemon proxy from your shell HTTP_PROXY ('make daemon-proxy-clear' to undo). The"
+	@echo "make target auto-detects snap vs systemd Docker."
+	@echo "If layer 4 fails but layer 5 works: shell creds are wrong (encoding?). Compose builds"
 	@echo "will still pull but 'pip install' inside the build may fail."
 
-# ── Daemon proxy: write systemd drop-in from current shell HTTP_PROXY ───────
+# ── Daemon proxy: configure dockerd to use shell HTTP_PROXY ─────────────────
 # Required for Linux corporate-proxy users — the Docker daemon does NOT inherit
 # proxy from the user shell. Without this, 'docker pull' goes through any
-# transparent intercepting proxy unauthenticated and 401s. Idempotent: rewrites
-# the drop-in only when contents differ; restarts Docker only if needed.
-# Requires sudo + systemd; the conf file is written 0600 because it contains the
-# proxy password in cleartext (URL-encode special chars: ! -> %21, @ -> %40, etc).
+# transparent intercepting proxy unauthenticated and 401s.
+#
+# Auto-detects install type and dispatches:
+#   - snap docker  -> 'sudo snap set docker http-proxy=...' (snap auto-restarts dockerd)
+#   - native systemd -> writes /etc/systemd/system/docker.service.d/http-proxy.conf
+#                       (mode 0600 because it contains the cleartext password,
+#                       URL-encode special chars: ! -> %21, @ -> %40, etc.)
+# Idempotent: skips write/restart if the existing config already matches.
 daemon-proxy:
-	@if ! command -v systemctl >/dev/null 2>&1; then \
-	  echo "Error: systemctl not found. Linux/systemd-only target."; \
-	  echo "On Docker Desktop (macOS/Windows) configure Settings -> Resources -> Proxies."; \
-	  exit 1; \
-	fi
 	@if [ -z "$$HTTP_PROXY$$http_proxy$$HTTPS_PROXY$$https_proxy" ]; then \
 	  echo "Error: HTTP_PROXY (or http_proxy / HTTPS_PROXY / https_proxy) is not set."; \
 	  echo "Export it in this shell, then re-run 'make daemon-proxy'. Example:"; \
@@ -203,13 +217,51 @@ daemon-proxy:
 	@H="$${HTTP_PROXY:-$$http_proxy}"; \
 	 S="$${HTTPS_PROXY:-$${https_proxy:-$$H}}"; \
 	 N="$${NO_PROXY:-$${no_proxy:-localhost,127.0.0.1,::1,host.docker.internal}}"; \
-	 redacted_h=$$(echo "$$H" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'); \
-	 redacted_s=$$(echo "$$S" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'); \
+	 redact() { echo "$$1" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'; }; \
 	 echo "Proposed daemon proxy:"; \
-	 echo "  HTTP_PROXY=$$redacted_h"; \
-	 echo "  HTTPS_PROXY=$$redacted_s"; \
+	 echo "  HTTP_PROXY=$$(redact "$$H")"; \
+	 echo "  HTTPS_PROXY=$$(redact "$$S")"; \
 	 echo "  NO_PROXY=$$N"; \
 	 echo ""; \
+	 if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then \
+	   echo "Detected: snap-installed Docker. Using 'sudo snap set docker ...' (snap auto-restarts)."; \
+	   curr_h=$$(sudo snap get docker http-proxy 2>/dev/null || true); \
+	   curr_s=$$(sudo snap get docker https-proxy 2>/dev/null || true); \
+	   curr_n=$$(sudo snap get docker no-proxy 2>/dev/null || true); \
+	   if [ "$$curr_h" = "$$H" ] && [ "$$curr_s" = "$$S" ] && [ "$$curr_n" = "$$N" ]; then \
+	     echo "Snap docker proxy already up to date — no change."; \
+	     echo "Run 'make doctor' to verify."; \
+	     exit 0; \
+	   fi; \
+	   echo "Setting snap docker proxy (sudo will prompt; snap will auto-restart dockerd)..."; \
+	   sudo snap set docker http-proxy="$$H" https-proxy="$$S" no-proxy="$$N"; \
+	   sleep 2; \
+	   echo ""; \
+	   echo "Loaded by daemon:"; \
+	   info=$$(docker info 2>/dev/null | grep -iE 'proxy' || true); \
+	   if [ -z "$$info" ]; then \
+	     echo "  (no proxy in 'docker info' yet — snap restart may still be in progress; rerun 'make doctor' in a few seconds)"; \
+	   else \
+	     echo "$$info" | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g'; \
+	   fi; \
+	   echo ""; \
+	   echo "Next: 'make doctor' to confirm a base-image pull works."; \
+	   exit 0; \
+	 fi; \
+	 if ! command -v systemctl >/dev/null 2>&1; then \
+	   echo "Error: not snap-installed and no systemctl available."; \
+	   echo "Manual setup depends on your install: Docker Desktop -> Settings -> Resources -> Proxies."; \
+	   exit 1; \
+	 fi; \
+	 if ! systemctl list-unit-files docker.service >/dev/null 2>&1; then \
+	   echo "Error: 'docker.service' systemd unit not found and Docker is not snap-installed."; \
+	   echo "Your Docker may be rootless, Docker Desktop, or pointing at a remote context. Run:"; \
+	   echo "  systemctl list-unit-files | grep -iE 'docker|moby|containerd'"; \
+	   echo "  systemctl --user list-unit-files | grep -iE 'docker'"; \
+	   echo "  docker context ls"; \
+	   exit 1; \
+	 fi; \
+	 echo "Detected: native systemd Docker. Using /etc/systemd/system/docker.service.d/http-proxy.conf."; \
 	 tmp=$$(mktemp); trap 'rm -f $$tmp' EXIT; \
 	 printf '[Service]\nEnvironment="HTTP_PROXY=%s"\nEnvironment="HTTPS_PROXY=%s"\nEnvironment="NO_PROXY=%s"\n' "$$H" "$$S" "$$N" > $$tmp; \
 	 conf=/etc/systemd/system/docker.service.d/http-proxy.conf; \
@@ -226,25 +278,48 @@ daemon-proxy:
 	 sudo systemctl restart docker; \
 	 echo ""; \
 	 echo "Loaded by daemon:"; \
-	 docker info 2>/dev/null | grep -iE 'proxy' \
-	   | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g' \
-	   || echo "  (no proxy in 'docker info' — check 'sudo systemctl status docker')"; \
+	 info=$$(docker info 2>/dev/null | grep -iE 'proxy' || true); \
+	 if [ -z "$$info" ]; then \
+	   echo "  (no proxy in 'docker info' — check 'sudo systemctl status docker')"; \
+	 else \
+	   echo "$$info" | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g'; \
+	 fi; \
 	 echo ""; \
 	 echo "Next: 'make doctor' to confirm a base-image pull works."
 
+# Reverse of daemon-proxy. Cleans both snap config and any orphan systemd
+# drop-in (in case daemon-proxy was run earlier on a host that turned out to
+# be snap-installed, leaving a harmless but tidier-removed file behind).
 daemon-proxy-clear:
-	@conf=/etc/systemd/system/docker.service.d/http-proxy.conf; \
-	 if [ ! -f $$conf ]; then \
-	   echo "$$conf not present — nothing to remove."; \
+	@cleared=0; \
+	 if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then \
+	   echo "Unsetting snap docker proxy keys (sudo will prompt)..."; \
+	   sudo snap unset docker http-proxy https-proxy no-proxy 2>/dev/null || true; \
+	   cleared=1; \
+	 fi; \
+	 conf=/etc/systemd/system/docker.service.d/http-proxy.conf; \
+	 if [ -f $$conf ]; then \
+	   echo "Removing $$conf and restarting Docker..."; \
+	   sudo rm -f $$conf; \
+	   sudo rmdir /etc/systemd/system/docker.service.d 2>/dev/null || true; \
+	   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files docker.service >/dev/null 2>&1; then \
+	     sudo systemctl daemon-reload; \
+	     sudo systemctl restart docker; \
+	   fi; \
+	   cleared=1; \
+	 fi; \
+	 if [ "$$cleared" = "0" ]; then \
+	   echo "Nothing to clear (no snap docker config and no systemd drop-in)."; \
 	   exit 0; \
 	 fi; \
-	 echo "Removing $$conf (sudo will prompt) and restarting Docker..."; \
-	 sudo rm -f $$conf; \
-	 sudo systemctl daemon-reload; \
-	 sudo systemctl restart docker; \
+	 sleep 2; \
 	 echo ""; \
-	 docker info 2>/dev/null | grep -iE 'proxy' \
-	   || echo "  (no proxy in 'docker info' — daemon is back to direct egress)"
+	 info=$$(docker info 2>/dev/null | grep -iE 'proxy' || true); \
+	 if [ -z "$$info" ]; then \
+	   echo "  (no proxy in 'docker info' — daemon is back to direct egress)"; \
+	 else \
+	   echo "Still loaded:"; echo "$$info" | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g'; \
+	 fi
 
 # ── pip-cache (offline-friendly Docker builds) ───────────────────────────────
 pip-cache:

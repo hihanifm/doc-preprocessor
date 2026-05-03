@@ -61,9 +61,25 @@ Or — equivalently for Compose only — copy [.env.example](../.env.example) to
 
 `NO_PROXY` defaults broaden to `localhost,127.0.0.1,::1,127.0.0.0/8,host.docker.internal` so local and host-bound LLM/Ollama URLs aren't forced through a bad proxy.
 
-### Layer 3 — Docker daemon (Linux/systemd)
+### Layer 3 — Docker daemon (Linux)
 
-This is the only layer that affects `docker pull`. Required to fetch the base image, the BuildKit frontend, or any image the daemon itself loads. `make dev` clearing shell proxy will *not* help here — the daemon has its own config.
+This is the only layer that affects `docker pull`. Required to fetch the base image, the BuildKit frontend, or any image the daemon itself loads. `make dev` clearing shell proxy will *not* help here — the daemon has its own config, and corporate networks often run a *transparent* intercepting proxy that catches "direct" requests from dockerd and 401s them.
+
+The config surface depends on how Docker is installed. `make daemon-proxy` auto-detects this for you; if you want to do it by hand:
+
+**Snap-installed Docker** (`which docker` returns `/snap/bin/docker`):
+
+```bash
+sudo snap set docker http-proxy="http://USER:PASSWORD@proxy-host:4433"
+sudo snap set docker https-proxy="http://USER:PASSWORD@proxy-host:4433"
+sudo snap set docker no-proxy="localhost,127.0.0.1,host.docker.internal,.corp.samsungelectronics.net"
+# Snap auto-restarts dockerd on config change.
+docker info | grep -iE 'proxy'                                  # verify
+```
+
+To clear: `sudo snap unset docker http-proxy https-proxy no-proxy`. Note: snap docker has confined volume mounts (only `/home`, `/root`, `/media`, `/mnt`, etc. are bind-mountable), so keep your repo somewhere under `/home/<user>`.
+
+**Native systemd Docker** (`docker.service` exists):
 
 ```bash
 sudo mkdir -p /etc/systemd/system/docker.service.d
@@ -75,16 +91,23 @@ Environment="NO_PROXY=localhost,127.0.0.1,host.docker.internal,.corp.samsungelec
 EOF
 sudo systemctl daemon-reload && sudo systemctl restart docker
 docker info | grep -iE 'proxy'                                  # verify
-docker pull public.ecr.aws/docker/library/python:3.12-slim       # smoke test
 ```
 
-> **Docker Desktop (macOS / Windows):** instead of systemd, use *Settings → Resources → Proxies*. The same three layers still apply; only the Layer 3 surface differs.
+To clear: remove the file and `daemon-reload` + `restart`.
+
+**Smoke test** (same for both):
+
+```bash
+docker pull public.ecr.aws/docker/library/python:3.12-slim
+```
+
+> **Docker Desktop (macOS / Windows):** instead of either of the above, use *Settings → Resources → Proxies*. The same three layers still apply; only the Layer 3 surface differs.
 
 ### Make targets
 
 - `make doctor` — walks all three layers: prints `docker info` proxy fields, the systemd drop-in file contents (redacted), `systemctl show` Environment, the shell proxy, an isolated `curl --proxy "$HTTP_PROXY" public.ecr.aws/v2/` test, and finally a `docker pull` smoke test for the base image. Passwords are redacted in printed URLs (`USER:<redacted>@host`). Run this first when builds fail.
-- `make daemon-proxy` — writes `/etc/systemd/system/docker.service.d/http-proxy.conf` from your current shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, reloads systemd, and restarts Docker. Idempotent (no-op if config already matches). Requires `sudo` and `systemctl`. The conf file is written `0600` because it contains the proxy password in cleartext — URL-encode special chars before exporting.
-- `make daemon-proxy-clear` — removes the drop-in and restarts Docker (back to direct egress).
+- `make daemon-proxy` — auto-detects snap vs native systemd Docker and configures the daemon proxy from your current shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`. Snap path uses `sudo snap set docker http-proxy=...` (snap auto-restarts dockerd). Systemd path writes `/etc/systemd/system/docker.service.d/http-proxy.conf` (mode `0600`, contains cleartext password — URL-encode special chars before exporting), reloads systemd, and restarts Docker. Idempotent in both cases (no-op if config already matches).
+- `make daemon-proxy-clear` — undoes whichever path was used: `snap unset` and/or remove the systemd drop-in, then restart Docker.
 - `make dev` — by default passes shell proxy through to compose (Layer 1 → Layer 2). Set `NO_DOCKER_PROXY=1` to force-clear (rare; only useful when daemon proxy is mis-auth'd *and* the registry is reachable directly).
 
 #### Typical first-time setup on a Linux box behind a corporate proxy
