@@ -121,6 +121,40 @@ make doctor         # verify all 7 layers
 make dev            # build + run
 ```
 
+### Proxies that expire ("the Firefox dance")
+
+Some corporate proxies (Bluecoat / Squid configured with `auth_param ... session`) authenticate **by source IP** after the first successful login and expire the cache after a TTL (often 5–60 min). Symptom: things work for a while, then start 401-ing again until you open Firefox, fill the proxy auth dialog, and continue. Two ways to automate this:
+
+1. **`make proxy-keepalive`** — runs in a separate terminal and curls a small URL through the proxy every 5 min (configurable via `PROXY_REFRESH_SEC`). Each successful curl extends the IP cache, so you never see the dialog again. Works only if the proxy accepts **Basic** auth via `user:pass@host` URLs (most do, even when they also support Firefox interactive). Verify with:
+
+   ```bash
+   curl --max-time 10 -sS -o /dev/null -w "HTTP %{http_code}\n" \
+     -x "$HTTP_PROXY" https://www.google.com/generate_204
+   ```
+
+   - `HTTP 204` → Basic auth works; just run `make proxy-keepalive`.
+   - `HTTP 407` → proxy refuses Basic; you need the px-proxy fallback below.
+
+2. **`px-proxy`** (NTLM/Kerberos fallback) — if the proxy only accepts NTLM or Negotiate (browser-native auth), Basic credentials in URLs will never work. Run a local NTLM-aware proxy that handles the upstream auth and exposes a plain HTTP endpoint on `127.0.0.1`:
+
+   ```bash
+   pip3 install --user px-proxy
+   px --username "DOMAIN\\$USER" \
+      --proxy "txdrt_proxy_1.corp.samsungelectronics.net:4433" \
+      --listen 127.0.0.1 --port 3128
+   ```
+
+   Then point everything at the local px (no creds in URL):
+
+   ```bash
+   export HTTP_PROXY="http://127.0.0.1:3128"
+   export HTTPS_PROXY="$HTTP_PROXY"
+   sudo snap set docker http-proxy="$HTTP_PROXY" https-proxy="$HTTP_PROXY" \
+                        no-proxy="localhost,127.0.0.1,::1,host.docker.internal"
+   ```
+
+   Snap docker note: snap confinement may block reaching `127.0.0.1` from inside the snap. If `make doctor §5` then fails with "connection refused", run px on `0.0.0.0` (or your LAN IP) and use that address instead.
+
 ### Symptoms → fix cheatsheet
 
 | You see… | Layer | Fix |

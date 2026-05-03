@@ -15,7 +15,8 @@ COMPOSE := $(DOCKER_COMPOSE_ENV) docker compose
 # Single Flask service; ports from docker-compose.yml (prod :5000, dev host :35050).
 .PHONY: help up down down-all build rebuild restart logs logs-dev ps dev e2e-up \
 	prod prod-down down-prod build-prod logs-prod \
-	run run-lan pip-cache build-dev doctor daemon-proxy daemon-proxy-clear
+	run run-lan pip-cache build-dev doctor daemon-proxy daemon-proxy-clear \
+	proxy-keepalive
 
 help:
 	@echo ""
@@ -56,6 +57,7 @@ help:
 	@echo "    refs/docker-lab-guidelines.md for the three-layer setup."
 	@echo "    make daemon-proxy        Write /etc/systemd/.../http-proxy.conf from \$$HTTP_PROXY (sudo)"
 	@echo "    make daemon-proxy-clear  Remove daemon proxy drop-in and restart Docker (sudo)"
+	@echo "    make proxy-keepalive     Periodic curl to keep corporate-proxy IP-cache auth warm"
 	@echo ""
 
 # ── Dev (profile dev, service app-dev) ─────────────────────────────────────────
@@ -320,6 +322,53 @@ daemon-proxy-clear:
 	 else \
 	   echo "Still loaded:"; echo "$$info" | sed -E 's#(://[^:[:space:]]+:)[^@[:space:]]+(@)#\1<redacted>\2#g'; \
 	 fi
+
+# ── Proxy keepalive: refresh corporate-proxy IP-cache auth ──────────────────
+# Some corporate proxies (Bluecoat / Squid with `auth_param ... session`)
+# authenticate by source IP after the first successful login and expire the
+# cache after a TTL. Once expired, you'd otherwise need to open Firefox and
+# re-enter creds in the proxy auth dialog (the "Firefox dance"). This target
+# replays the auth via curl on a timer to keep the cache warm — works because
+# any successful authenticated request refreshes the same IP cache.
+#
+# Run in a SEPARATE terminal and leave it running while you work:
+#   export HTTP_PROXY="http://USER:PASSWORD@proxy:port"  # URL-encode special chars
+#   make proxy-keepalive
+#
+# Then in your normal terminal: 'make daemon-proxy && make dev'.
+#
+# Tunables:
+#   PROXY_REFRESH_SEC=300   default 5 min — reduce if your cache TTL is shorter
+#   PROXY_PROBE_URL=...     default https://www.google.com/generate_204 (small, fast)
+proxy-keepalive:
+	@if [ -z "$$HTTP_PROXY$$http_proxy$$HTTPS_PROXY$$https_proxy" ]; then \
+	  echo "Error: HTTP_PROXY (or http_proxy / HTTPS_PROXY / https_proxy) is not set."; \
+	  echo "Export it in this shell first, then re-run."; \
+	  exit 1; \
+	fi
+	@if ! command -v curl >/dev/null 2>&1; then \
+	  echo "Error: curl is not installed (sudo apt install curl)."; exit 1; \
+	fi
+	@proxy="$${HTTPS_PROXY:-$${https_proxy:-$${HTTP_PROXY:-$$http_proxy}}}"; \
+	 interval=$${PROXY_REFRESH_SEC:-300}; \
+	 probe=$${PROXY_PROBE_URL:-https://www.google.com/generate_204}; \
+	 redacted=$$(echo "$$proxy" | sed -E 's#(://[^:]+:)[^@]+(@)#\1<redacted>\2#g'); \
+	 echo "Proxy keepalive starting."; \
+	 echo "  proxy:    $$redacted"; \
+	 echo "  probe:    $$probe"; \
+	 echo "  interval: $$interval s   (Ctrl-C to stop)"; \
+	 echo ""; \
+	 while true; do \
+	   code=$$(curl --max-time 10 -sS -o /dev/null -w "%{http_code}" -x "$$proxy" "$$probe" 2>/dev/null || echo "000"); \
+	   ts=$$(date +%H:%M:%S); \
+	   case "$$code" in \
+	     2*|301|302|404) echo "[$$ts] OK ($$code) — proxy auth alive";; \
+	     407|401)        echo "[$$ts] AUTH FAILED ($$code) — Basic creds rejected; this proxy may need NTLM/Negotiate (see refs/docker-lab-guidelines.md for px-proxy fallback)";; \
+	     000)            echo "[$$ts] NETWORK FAIL — proxy unreachable, VPN dropped?";; \
+	     *)              echo "[$$ts] UNEXPECTED ($$code) — continuing";; \
+	   esac; \
+	   sleep $$interval; \
+	 done
 
 # ── pip-cache (offline-friendly Docker builds) ───────────────────────────────
 pip-cache:
