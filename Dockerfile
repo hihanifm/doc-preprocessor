@@ -1,26 +1,11 @@
-# No `# syntax=...` directive: avoids an extra Docker Hub fetch of the BuildKit
-# frontend image (which fails behind blocked DH / mis-auth corporate proxies).
-# Modern BuildKit's built-in frontend already supports `RUN --mount=type=cache`.
-#
 # Default: AWS Public ECR mirror of Docker Official Images (many labs block Docker Hub).
 # Override: PYTHON_IMAGE=docker.io/library/python:3.12-slim
 ARG PYTHON_IMAGE=public.ecr.aws/docker/library/python:3.12-slim
 FROM ${PYTHON_IMAGE}
 
-# Proxy build args — pass from docker-compose / host if lab egress is restricted.
-# Both casings are accepted: tools like curl/libcurl prefer lowercase.
-ARG HTTP_PROXY=
-ARG HTTPS_PROXY=
-ARG NO_PROXY=
-ARG http_proxy=
-ARG https_proxy=
-ARG no_proxy=
-ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY} \
-    http_proxy=${http_proxy} https_proxy=${https_proxy} no_proxy=${no_proxy}
-
 WORKDIR /app
 
-# Install lab CA cert if present (MITM / corporate proxy roots; safe no-op when certs/ is empty).
+# Install lab CA cert if present (corporate TLS interception; safe no-op when certs/ is empty).
 COPY certs/ /tmp/certs/
 RUN if ls /tmp/certs/*.crt 2>/dev/null 1>&2; then \
       cp /tmp/certs/*.crt /usr/local/share/ca-certificates/ && \
@@ -33,11 +18,9 @@ ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
 COPY requirements.txt .
 COPY pip-cache/ /pip-cache/
 
-# Install from local pip-cache first (offline/proxy-safe); both paths may still hit PyPI for deps.
-# Broad --trusted-host list for lab MITM / proxy SSL issues (same index + redirects + file CDN).
-#
-# BuildKit cache mount: pip reuses wheels between builds on this machine (great behind slow proxies)
-# without baking ~/.cache/pip into the image (--no-cache-dir alone forces re-download every build).
+# Install from local pip-cache first (offline/proxy-safe); falls back to PyPI for missing deps.
+# --trusted-host list is defensive against corporate TLS interception (harmless otherwise).
+# BuildKit cache mount: pip reuses wheels between builds without baking them into image layers.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
         --trusted-host pypi.org \
@@ -58,9 +41,6 @@ COPY . .
 
 RUN mkdir -p /data
 
-# Drop build-time proxy from image layers; runtime uses compose `environment` (x-proxy-env) when set.
-ENV CONFIG_PATH=/data/config.json \
-    HTTP_PROXY= HTTPS_PROXY= NO_PROXY= \
-    http_proxy= https_proxy= no_proxy=
+ENV CONFIG_PATH=/data/config.json
 
 EXPOSE 5000
