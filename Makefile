@@ -1,12 +1,13 @@
 .DEFAULT_GOAL := help
 
-# Proxy: host HTTP(S)_PROXY often breaks Docker pulls/builds on Linux; clear for compose by default.
-# Full story: refs/docker-lab-guidelines.md
-#   make dev USE_SYSTEM_PROXY=1   — pass host proxy into compose build/up (restricted egress labs)
-ifeq ($(USE_SYSTEM_PROXY),1)
-DOCKER_COMPOSE_ENV :=
-else
+# Proxy: auto-detect. If the shell has any HTTP(S)_PROXY set, pass it through to compose
+# (build args + runtime env). Otherwise leave compose env untouched. Set NO_DOCKER_PROXY=1
+# to force-clear (rare: only useful when daemon proxy is mis-auth'd AND the registry is
+# reachable directly). Full story: refs/docker-lab-guidelines.md
+ifeq ($(NO_DOCKER_PROXY),1)
 DOCKER_COMPOSE_ENV := HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= FTP_PROXY=
+else
+DOCKER_COMPOSE_ENV :=
 endif
 
 COMPOSE := $(DOCKER_COMPOSE_ENV) docker compose
@@ -14,7 +15,7 @@ COMPOSE := $(DOCKER_COMPOSE_ENV) docker compose
 # Single Flask service; ports from docker-compose.yml (prod :5000, dev host :35050).
 .PHONY: help up down down-all build rebuild restart logs logs-dev ps dev e2e-up \
 	prod prod-down down-prod build-prod logs-prod \
-	run run-lan pip-cache build-dev
+	run run-lan pip-cache build-dev doctor
 
 help:
 	@echo ""
@@ -46,8 +47,13 @@ help:
 	@echo "  Lab / offline builds"
 	@echo "    make pip-cache          Linux wheels → pip-cache/"
 	@echo ""
+	@echo "  Diagnostics"
+	@echo "    make doctor             Show daemon proxy + smoke-test base image pull"
+	@echo ""
 	@echo "  Proxy (Linux)"
-	@echo "    Default: proxy env cleared for compose. USE_SYSTEM_PROXY=1 keeps host proxy."
+	@echo "    Default: shell HTTP(S)_PROXY is passed through to compose. Set NO_DOCKER_PROXY=1"
+	@echo "    to force-clear. Daemon-level proxy (systemd) governs 'docker pull'; see"
+	@echo "    refs/docker-lab-guidelines.md for the three-layer setup."
 	@echo ""
 
 # ── Dev (profile dev, service app-dev) ─────────────────────────────────────────
@@ -114,6 +120,22 @@ run-lan:
 	@test -f .venv/bin/activate || python3 -m venv .venv
 	@. .venv/bin/activate && pip install -q -r requirements.txt
 	@. .venv/bin/activate && python app.py --host 0.0.0.0
+
+# ── Diagnostics: confirm daemon proxy + smoke-test image pulls ──────────────
+# Run before `make dev` when builds fail with proxy/registry errors. The base-image
+# pull uses the same daemon proxy that compose builds rely on.
+doctor:
+	@echo "── Daemon proxy + registry config ──"
+	@docker info 2>/dev/null | grep -iE 'proxy|registry' || echo "  (no proxy fields in 'docker info' — daemon is not configured for proxy)"
+	@echo ""
+	@echo "── Shell proxy (used by compose substitution) ──"
+	@env | grep -iE '^(http|https|no|all|ftp)_proxy=' || echo "  (no *_PROXY set in shell)"
+	@echo ""
+	@echo "── Pull test (base image) ──"
+	@docker pull $${PYTHON_IMAGE:-public.ecr.aws/docker/library/python:3.12-slim}
+	@echo ""
+	@echo "── Pull test (DH frontend; only relevant if a Dockerfile re-adds '# syntax=...') ──"
+	@docker pull docker.io/docker/dockerfile:1 || echo "  (failure here is harmless — this repo's Dockerfile no longer needs it)"
 
 # ── pip-cache (offline-friendly Docker builds) ───────────────────────────────
 pip-cache:
