@@ -144,3 +144,32 @@ The best ask is **(1) for individuals** and **(2) for the team**. Either makes t
 - **No `# syntax=…` directive:** intentionally omitted from [Dockerfile](../Dockerfile). Modern BuildKit's built-in frontend (Docker Desktop / Compose v2) supports `RUN --mount=type=cache` without it; including the directive would force an extra Docker Hub fetch (`docker.io/docker/dockerfile:1`) before the build can start.
 - **Pip cache:** `RUN --mount=type=cache,target=/root/.cache/pip` lets rebuilds reuse downloaded wheels on the Docker host without baking them into image layers. Use BuildKit (default in Compose v2; set `DOCKER_BUILDKIT=1` on older Linux). When `pip-cache/` contains wheels (`make pip-cache`), the build installs fully offline (`--no-index --find-links`) — no network needed, proxy-safe. When empty, falls back to PyPI with `--trusted-host` flags. The BuildKit cache mount is active in both paths.
 - **TLS interception:** drop corporate root `.crt` files into `certs/` at the repo root; the Dockerfile installs them into the image's CA store and points `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` at the system bundle. Safe no-op when `certs/` is empty.
+
+## Audit checklist (for coding agents)
+
+When adopting these guidelines in a new project, verify every item below against the `Dockerfile`, `docker-compose.yml`, and `Makefile`. Flag anything missing as a suggestion to the user.
+
+### Dockerfile
+- [ ] Base image uses `public.ecr.aws/docker/library/python:X.Y-slim` (not Docker Hub) — avoids pull failures on corporate networks
+- [ ] `PYTHON_IMAGE` build arg present so the registry can be overridden without editing the file
+- [ ] No `# syntax=docker/dockerfile:1` directive — would force an extra Docker Hub fetch before the build starts
+- [ ] `certs/` copied and installed into the CA store; `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` set — safe no-op when dir is empty
+- [ ] `--mount=type=cache,target=/root/.cache/pip` on the pip `RUN` — reuses wheels between rebuilds without baking them into layers
+- [ ] Wheel detection `if ls pip-cache/*.whl … | grep -q .` before pip install — uses `--no-index --find-links` when wheels present (fully offline), PyPI fallback otherwise
+- [ ] `--trusted-host` flags on the PyPI fallback path — defensive against corporate TLS interception
+- [ ] No unused `ENV` vars left in the file
+
+### docker-compose.yml
+- [ ] Dev service on host port **35050** → container port 5000; prod on **5000:5000**
+- [ ] `extra_hosts: ["host.docker.internal:host-gateway"]` — lets the container reach host-bound LLMs/proxies on Linux
+- [ ] `env_file` with `required: false` — compose doesn't error when `.env` is absent
+- [ ] Dev service bind-mounts source (`.:/app`) for live reload; prod does not
+- [ ] `restart: unless-stopped` on both services
+
+### Makefile
+- [ ] `make run` / `make run-lan` for Mac local dev (no Docker) — creates venv, installs deps, starts Flask
+- [ ] `make dev` / `make prod` for Docker dev/prod stacks
+- [ ] `make pip-cache` to pre-download Linux wheels for offline Docker builds
+- [ ] `make doctor` smoke-tests `docker pull` + optional curl proxy probe
+- [ ] `make proxy-keepalive` keeps corporate IP-cache auth fresh
+- [ ] `make help` lists all targets with one-line descriptions
