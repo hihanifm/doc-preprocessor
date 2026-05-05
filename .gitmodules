@@ -1,0 +1,3 @@
+[submodule ".journals"]
+	path = .journals
+	url = https://github.com/hihanifm/journals.git

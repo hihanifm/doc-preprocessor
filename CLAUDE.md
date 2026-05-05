@@ -2,6 +2,10 @@
 
 Project guidance for human developers, **Claude Code**, **Cursor**, and other coding agents working in this repository.
 
+## Shared guidelines
+
+Cross-project standards live in `.journals/guidelines/` (git submodule → `hihanifm/journals`). When working on Docker, Makefile, or Compose — read `.journals/guidelines/docker-lab-guidelines.md` and audit against its checklist before suggesting changes.
+
 ## What this project does
 
 **Docs Garage** — local Flask app for tinkering with office files in one place: extract structured rows (including test cases) from `**.docx`** or **digital `.pdf`** via template extractors, filter and preview in the UI, export `**.xlsx**`, and shrink huge spreadsheets with column filters before download.
