@@ -476,6 +476,84 @@
     }
     #llm-models-hint.llm-models-hint--err { color: #b91c1c; }
     #llm-models-hint.llm-models-hint--ok { color: #15803d; }
+
+    /* Spreadsheet editor (client-side only) */
+    #ss-editor {
+      background: var(--surface);
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      margin-bottom: 12px;
+      margin-top: 4px;
+      box-shadow: var(--shadow);
+    }
+    .local-warning {
+      background: linear-gradient(180deg, #fffbeb 0%, #fef9c3 100%);
+      border: 1px solid #fcd34d;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 0.84rem;
+      line-height: 1.5;
+      color: #713f12;
+      margin-bottom: 14px;
+    }
+    .local-warning strong { color: #78350f; }
+    .local-warning--strong {
+      background: linear-gradient(180deg, #fee2e2 0%, #fecaca 100%);
+      border-color: #f87171;
+      color: #7f1d1d;
+    }
+    #ss-editor-status {
+      font-size: 0.88rem;
+      min-height: 1.2em;
+      margin-top: 10px;
+    }
+    #ss-editor-status.error { color: #dc2626; }
+    #ss-editor-status.ok { color: #16a34a; }
+    .ss-editor-table-wrap { margin-top: 12px; overflow-x: auto; }
+    .ss-editor-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+    }
+    .ss-editor-table thead th {
+      background: #1e3a5f;
+      color: #fff;
+      padding: 8px 10px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .ss-editor-table thead th.ss-editor-th-del {
+      width: 72px;
+      text-align: center;
+      background: #334155;
+    }
+    .ss-editor-table tbody td {
+      padding: 4px 6px;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: middle;
+    }
+    .ss-editor-table tbody tr.is-deleted td { opacity: 0.55; background: #fef2f2; }
+    .ss-editor-table tbody tr:nth-child(even):not(.is-deleted) td { background: #f8fafc; }
+    .ss-editor-table input[type="text"] {
+      width: 100%;
+      min-width: 80px;
+      max-width: 360px;
+      padding: 6px 8px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-family: inherit;
+    }
+    .ss-editor-table input[type="text"]:disabled {
+      background: #f1f5f9;
+      cursor: not-allowed;
+    }
+    .ss-editor-table input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
+    .ss-editor-empty { color: var(--muted); font-size: 0.88rem; padding: 16px; text-align: center; }
   </style>
 </head>
 <body>
@@ -486,6 +564,7 @@
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-editor" aria-selected="false" aria-controls="panel-editor" data-tab="editor">Spreadsheet editor</button>
     </div>
 
     <div id="panel-converter" class="tab-panel" role="tabpanel" aria-labelledby="tab-converter">
@@ -670,11 +749,60 @@
       </div>
     </div>
 
+    <div id="panel-editor" class="tab-panel" role="tabpanel" aria-labelledby="tab-editor" hidden>
+      <div id="ss-editor">
+        <div class="local-warning" id="ss-editor-local-banner">
+          <strong>Local only.</strong> This tab loads and edits your workbook entirely in your browser. Nothing is uploaded to the server.
+          Very large files can slow down or crash the tab — <strong>split huge workbooks first</strong> if you hit limits.
+          Saving downloads a new <strong>.xlsx</strong>; <strong>.xlsm</strong> macros are not preserved. Formatting may be simplified.
+        </div>
+        <p class="hint" id="ss-editor-size-hint" hidden></p>
+
+        <div id="ss-editor-drop" class="drop-zone">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Drag &amp; drop an <strong>.xlsx</strong> or <strong>.xlsm</strong> here, or <strong>click to browse</strong></p>
+          <small>One workbook · edit cells, mark rows to remove, then download</small>
+          <p class="drop-zone__picked" id="ss-editor-file-picked" hidden><span id="ss-editor-file-display"></span></p>
+          <input type="file" id="ss-editor-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-label="Choose workbook for client-side editor" />
+        </div>
+
+        <div class="filter-row" id="ss-editor-toolbar" style="display:none;">
+          <label>Sheet
+            <select id="ss-editor-sheet" aria-label="Worksheet"></select>
+          </label>
+          <label>Rows per page
+            <select id="ss-editor-page-size" aria-label="Rows per page">
+              <option value="5">5</option>
+              <option value="10" selected>10</option>
+              <option value="15">15</option>
+            </select>
+          </label>
+          <span id="ss-editor-meta" class="hint" style="margin:0;"></span>
+        </div>
+        <div class="btn-row" id="ss-editor-nav" style="display:none;">
+          <button type="button" class="btn btn--secondary btn--sm" id="ss-editor-prev" aria-label="Previous page">Previous</button>
+          <button type="button" class="btn btn--secondary btn--sm" id="ss-editor-next" aria-label="Next page">Next</button>
+          <span class="hint" id="ss-editor-page-label" style="margin:0;"></span>
+          <button type="button" class="btn btn--success" id="ss-editor-download">Download edited sheet (.xlsx)</button>
+        </div>
+        <div id="ss-editor-table-host" class="ss-editor-table-wrap"></div>
+        <p id="ss-editor-status" aria-live="polite"></p>
+      </div>
+    </div>
+
   </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
     function esc(s) {
       return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    function escAttr(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     const COL_KEYS = ['file_name','test_id','test_name','description','preconditions','procedure_steps','expected_results'];
@@ -683,6 +811,8 @@
       'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';
     const SUBTITLE_EXCEL =
       'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
+    const SUBTITLE_EDITOR =
+      'Spreadsheet editor: open a workbook in your browser only — paginate, edit cells, mark rows to remove, download a new .xlsx.';
 
     const pageSubtitle = document.getElementById('page-subtitle');
     document.querySelectorAll('.tab-bar .tab-trigger').forEach(btn => {
@@ -693,7 +823,10 @@
         });
         document.getElementById('panel-converter').hidden = tab !== 'converter';
         document.getElementById('panel-excel').hidden = tab !== 'excel';
-        pageSubtitle.textContent = tab === 'excel' ? SUBTITLE_EXCEL : SUBTITLE_CONVERTER;
+        document.getElementById('panel-editor').hidden = tab !== 'editor';
+        if (tab === 'excel') pageSubtitle.textContent = SUBTITLE_EXCEL;
+        else if (tab === 'editor') pageSubtitle.textContent = SUBTITLE_EDITOR;
+        else pageSubtitle.textContent = SUBTITLE_CONVERTER;
       });
     });
 
@@ -1742,6 +1875,304 @@
         downloadBtn.disabled = false;
       }
     });
+
+    // ── Spreadsheet editor (client-side xlsx) ────────────────────────────────
+    (function ssEditor() {
+      const SOFT_BYTES = 12 * 1024 * 1024;
+      const SOFT_ROWS = 40000;
+      const ssDrop = document.getElementById('ss-editor-drop');
+      const ssFileInput = document.getElementById('ss-editor-file');
+      const ssPicked = document.getElementById('ss-editor-file-picked');
+      const ssFileDisplay = document.getElementById('ss-editor-file-display');
+      const ssSizeHint = document.getElementById('ss-editor-size-hint');
+      const ssLocalBanner = document.getElementById('ss-editor-local-banner');
+      const ssSheet = document.getElementById('ss-editor-sheet');
+      const ssPageSize = document.getElementById('ss-editor-page-size');
+      const ssToolbar = document.getElementById('ss-editor-toolbar');
+      const ssNav = document.getElementById('ss-editor-nav');
+      const ssMeta = document.getElementById('ss-editor-meta');
+      const ssPrev = document.getElementById('ss-editor-prev');
+      const ssNext = document.getElementById('ss-editor-next');
+      const ssPageLabel = document.getElementById('ss-editor-page-label');
+      const ssDownload = document.getElementById('ss-editor-download');
+      const ssHost = document.getElementById('ss-editor-table-host');
+      const ssStatus = document.getElementById('ss-editor-status');
+
+      let wb = null;
+      let origName = '';
+      let lastEditorFile = null;
+      let sheetIndex = 0;
+      /** @type {Record<number, { rows: string[][], deleted: Set<number> }>} */
+      let states = {};
+      let page = 0;
+
+      function setSsStatus(msg, cls) {
+        ssStatus.textContent = msg || '';
+        ssStatus.className = cls ? cls : '';
+      }
+
+      function normalizeAoa(aoa) {
+        if (!aoa || !aoa.length) return [['']];
+        const maxCol = Math.max(1, ...aoa.map(r => (r && r.length) || 0));
+        return aoa.map(r => {
+          const row = Array.isArray(r) ? [...r] : [];
+          while (row.length < maxCol) row.push('');
+          return row.map(c => (c == null || c === '' ? '' : String(c)));
+        });
+      }
+
+      function sheetToRows(ws) {
+        let aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: true });
+        return normalizeAoa(aoa);
+      }
+
+      function getState(i) {
+        if (!states[i]) {
+          const ws = wb.Sheets[wb.SheetNames[i]];
+          states[i] = { rows: sheetToRows(ws), deleted: new Set() };
+        }
+        return states[i];
+      }
+
+      function dataRowCount(rows) {
+        return Math.max(0, rows.length - 1);
+      }
+
+      function renderEditorTable() {
+        if (!wb) {
+          ssHost.innerHTML = '';
+          return;
+        }
+        const st = getState(sheetIndex);
+        const rows = st.rows;
+        const deleted = st.deleted;
+        const ncol = Math.max(1, ...rows.map(r => r.length));
+        const nData = dataRowCount(rows);
+        const sz = Math.max(1, parseInt(ssPageSize.value, 10) || 10);
+        const totalPages = Math.max(1, Math.ceil(nData / sz) || 1);
+        if (page > totalPages - 1) page = Math.max(0, totalPages - 1);
+        const start = page * sz;
+        const end = Math.min(start + sz, nData);
+
+        if (nData === 0) {
+          ssHost.innerHTML = '<p class="ss-editor-empty">No data rows (header only).</p>';
+          ssPageLabel.textContent = 'Page 1 of 1 · 0 data rows';
+          ssPrev.disabled = true;
+          ssNext.disabled = true;
+          refreshMeta();
+          return;
+        }
+
+        const header = rows[0] || [];
+        const headCells = [];
+        for (let c = 0; c < ncol; c++) {
+          const h = header[c] != null ? String(header[c]) : '';
+          headCells.push(`<th>${esc(h)}</th>`);
+        }
+        const body = [];
+        for (let di = start; di < end; di++) {
+          const abs = di;
+          const r = rows[abs + 1] || [];
+          const isDel = deleted.has(abs);
+          const rowCells = [
+            `<td class="ss-editor-td-del"><input type="checkbox" aria-label="Mark row ${abs + 1} for removal" data-di="${abs}" class="ss-del-cb" ${isDel ? 'checked' : ''} /></td>`
+          ];
+          for (let c = 0; c < ncol; c++) {
+            const val = r[c] != null ? String(r[c]) : '';
+            const dis = isDel ? ' disabled' : '';
+            rowCells.push(
+              `<td><input type="text" class="ss-cell-inp" data-di="${abs}" data-col="${c}" value="${escAttr(val)}"${dis} /></td>`
+            );
+          }
+          body.push(`<tr class="${isDel ? 'is-deleted' : ''}" data-di="${abs}">${rowCells.join('')}</tr>`);
+        }
+
+        ssHost.innerHTML =
+          `<table class="ss-editor-table"><thead><tr><th class="ss-editor-th-del">Remove</th>${headCells.join('')}</tr></thead><tbody>${body.join('')}</tbody></table>`;
+        ssPageLabel.textContent = `Page ${page + 1} of ${totalPages} · rows ${start + 1}–${end} of ${nData} data rows`;
+        ssPrev.disabled = page <= 0;
+        ssNext.disabled = page >= totalPages - 1;
+        refreshMeta();
+
+        ssHost.querySelectorAll('.ss-del-cb').forEach(cb => {
+          cb.addEventListener('change', () => {
+            const di = parseInt(cb.getAttribute('data-di'), 10);
+            const st2 = getState(sheetIndex);
+            if (cb.checked) st2.deleted.add(di);
+            else st2.deleted.delete(di);
+            renderEditorTable();
+          });
+        });
+        ssHost.querySelectorAll('.ss-cell-inp').forEach(inp => {
+          inp.addEventListener('input', () => {
+            const di = parseInt(inp.getAttribute('data-di'), 10);
+            const col = parseInt(inp.getAttribute('data-col'), 10);
+            const st2 = getState(sheetIndex);
+            if (!st2.rows[di + 1]) st2.rows[di + 1] = Array(ncol).fill('');
+            st2.rows[di + 1][col] = inp.value;
+          });
+        });
+      }
+
+      function refreshMeta() {
+        if (!wb) return;
+        const st = getState(sheetIndex);
+        const nData = dataRowCount(st.rows);
+        const del = st.deleted.size;
+        ssMeta.textContent = `${nData.toLocaleString()} data rows · ${(st.rows[0] || []).length} columns · ${del} marked for removal`;
+      }
+
+      function updateSizeHint(file) {
+        const rows = getState(sheetIndex).rows;
+        const nData = dataRowCount(rows);
+        let strong = false;
+        let msg = '';
+        if (file && file.size >= SOFT_BYTES) {
+          strong = true;
+          msg = `This file is about ${(file.size / (1024 * 1024)).toFixed(1)} MB — editing happens entirely in memory; consider splitting it into smaller workbooks if the tab feels slow.`;
+        } else if (nData >= SOFT_ROWS) {
+          strong = true;
+          msg = `This sheet has about ${nData.toLocaleString()} data rows — the browser may struggle. Consider splitting the data if possible.`;
+        }
+        ssSizeHint.hidden = !msg;
+        ssSizeHint.textContent = msg;
+        ssLocalBanner.classList.toggle('local-warning--strong', strong);
+      }
+
+      function loadWorkbookFromFile(file) {
+        if (typeof XLSX === 'undefined') {
+          setSsStatus('Spreadsheet library failed to load. Check your network and refresh.', 'error');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = e => {
+          try {
+            const data = new Uint8Array(e.target.result);
+            wb = XLSX.read(data, { type: 'array', cellDates: true });
+            origName = file.name || 'workbook.xlsx';
+            states = {};
+            sheetIndex = 0;
+            page = 0;
+            ssSheet.innerHTML = '';
+            wb.SheetNames.forEach((name, idx) => {
+              const opt = document.createElement('option');
+              opt.value = String(idx);
+              opt.textContent = name;
+              ssSheet.appendChild(opt);
+            });
+            ssSheet.value = '0';
+            ssDrop.classList.add('drop-zone--has-file');
+            ssPicked.hidden = false;
+            ssFileDisplay.textContent = file.name;
+            ssToolbar.style.display = 'flex';
+            ssNav.style.display = 'flex';
+            getState(0);
+            refreshMeta();
+            updateSizeHint(lastEditorFile);
+            renderEditorTable();
+            setSsStatus('Ready — edits stay in this tab until you download.', 'ok');
+          } catch (err) {
+            wb = null;
+            states = {};
+            setSsStatus(`Could not read workbook: ${err.message || err}`, 'error');
+          }
+        };
+        reader.onerror = () => setSsStatus('Could not read file.', 'error');
+        reader.readAsArrayBuffer(file);
+      }
+
+      function attachFile(f) {
+        if (!f || !/\.(xlsx|xlsm)$/i.test(f.name)) {
+          setSsStatus('Choose an .xlsx or .xlsm file.', 'error');
+          return;
+        }
+        lastEditorFile = f;
+        ssFileInput.value = '';
+        loadWorkbookFromFile(f);
+      }
+
+      ssDrop.addEventListener('click', () => ssFileInput.click());
+      ssFileInput.addEventListener('change', () => {
+        const f = ssFileInput.files && ssFileInput.files[0];
+        if (f) attachFile(f);
+      });
+      ssDrop.addEventListener('dragover', e => { e.preventDefault(); ssDrop.classList.add('dragover'); });
+      ssDrop.addEventListener('dragleave', () => ssDrop.classList.remove('dragover'));
+      ssDrop.addEventListener('drop', e => {
+        e.preventDefault();
+        ssDrop.classList.remove('dragover');
+        const f = [...e.dataTransfer.files].find(x => /\.(xlsx|xlsm)$/i.test(x.name));
+        if (!f) {
+          setSsStatus('Drop an .xlsx or .xlsm workbook.', 'error');
+          return;
+        }
+        attachFile(f);
+      });
+
+      ssSheet.addEventListener('change', () => {
+        if (!wb) return;
+        sheetIndex = parseInt(ssSheet.value, 10) || 0;
+        page = 0;
+        getState(sheetIndex);
+        refreshMeta();
+        updateSizeHint(lastEditorFile);
+        renderEditorTable();
+      });
+
+      ssPageSize.addEventListener('change', () => {
+        page = 0;
+        renderEditorTable();
+      });
+
+      ssPrev.addEventListener('click', () => {
+        if (page > 0) {
+          page--;
+          renderEditorTable();
+        }
+      });
+      ssNext.addEventListener('click', () => {
+        const st = getState(sheetIndex);
+        const nData = dataRowCount(st.rows);
+        const sz = Math.max(1, parseInt(ssPageSize.value, 10) || 10);
+        const totalPages = Math.max(1, Math.ceil(nData / sz));
+        if (page < totalPages - 1) {
+          page++;
+          renderEditorTable();
+        }
+      });
+
+      ssDownload.addEventListener('click', () => {
+        if (!wb || typeof XLSX === 'undefined') return;
+        const st = getState(sheetIndex);
+        const rows = st.rows;
+        const deleted = st.deleted;
+        const header = rows[0] ? [...rows[0]] : [];
+        const out = [header.map(c => (c == null ? '' : String(c)))];
+        const n = dataRowCount(rows);
+        for (let i = 0; i < n; i++) {
+          if (!deleted.has(i)) {
+            const r = rows[i + 1] || [];
+            out.push(r.map(c => (c == null ? '' : String(c))));
+          }
+        }
+        const ws = XLSX.utils.aoa_to_sheet(out);
+        const outWb = XLSX.utils.book_new();
+        const name = wb.SheetNames[sheetIndex] || 'Sheet1';
+        XLSX.utils.book_append_sheet(outWb, ws, name.slice(0, 31));
+        const buf = XLSX.write(outWb, { bookType: 'xlsx', type: 'array' });
+        const blob = new Blob([buf], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        });
+        const base = (origName.replace(/\.(xlsx|xlsm)$/i, '') || 'workbook') + '_edited';
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = `${base}.xlsx`;
+        a.click();
+        URL.revokeObjectURL(url);
+        setSsStatus(`Downloaded ${a.download} (${out.length - 1} data rows).`, 'ok');
+      });
+    })();
   </script>
 </body>
 </html>
