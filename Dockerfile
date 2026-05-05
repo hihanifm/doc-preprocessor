@@ -16,31 +16,26 @@ ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
 COPY requirements.txt .
-COPY pip-cache/ /pip-cache/
+COPY pip-cache/ /tmp/pip-cache/
 
-# Install from local pip-cache first (offline/proxy-safe); falls back to PyPI for missing deps.
-# --trusted-host list is defensive against corporate TLS interception (harmless otherwise).
+# If wheels were pre-downloaded (make pip-cache), install fully offline — no network needed.
+# Otherwise fall back to PyPI with trusted-host flags for lab proxy environments.
 # BuildKit cache mount: pip reuses wheels between builds without baking them into image layers.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install \
-        --trusted-host pypi.org \
-        --trusted-host www.pypi.org \
-        --trusted-host pypi.python.org \
-        --trusted-host pypi.io \
-        --trusted-host files.pythonhosted.org \
-        --find-links /pip-cache/ -r requirements.txt \
-    || pip install \
-        --trusted-host pypi.org \
-        --trusted-host www.pypi.org \
-        --trusted-host pypi.python.org \
-        --trusted-host pypi.io \
-        --trusted-host files.pythonhosted.org \
-        -r requirements.txt
+    if ls /tmp/pip-cache/*.whl /tmp/pip-cache/*.tar.gz 2>/dev/null | grep -q .; then \
+      pip install --no-index --find-links /tmp/pip-cache/ -r requirements.txt; \
+    else \
+      pip install \
+          --trusted-host pypi.org \
+          --trusted-host www.pypi.org \
+          --trusted-host pypi.python.org \
+          --trusted-host pypi.io \
+          --trusted-host files.pythonhosted.org \
+          -r requirements.txt; \
+    fi
 
 COPY . .
 
 RUN mkdir -p /data
-
-ENV CONFIG_PATH=/data/config.json
 
 EXPOSE 5000
