@@ -15,7 +15,8 @@ Project guidance for human developers, **Claude Code**, **Cursor**, and other co
 cp .env.example .env
 
 # Start (creates venv, installs deps, launches server on http://localhost:5000)
-./start.sh
+make run          # localhost only
+make run-lan      # all interfaces (0.0.0.0)
 
 # Or manually
 source .venv/bin/activate

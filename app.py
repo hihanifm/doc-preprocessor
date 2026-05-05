@@ -79,6 +79,41 @@ def _document_suffix(filename: str | None) -> str | None:
     return ext if ext in (".docx", ".pdf") else None
 
 
+def _merge_contiguous_duplicates(rows):
+    """Merge adjacent rows with the same test_id; flag non-contiguous duplicates."""
+    TEXT_FIELDS = ("description", "preconditions", "procedure_steps", "expected_results")
+    merged = []
+    i = 0
+    while i < len(rows):
+        run = [rows[i]]
+        tid = rows[i].get("test_id", "")
+        while i + len(run) < len(rows) and rows[i + len(run)].get("test_id") == tid:
+            run.append(rows[i + len(run)])
+        if len(run) > 1 and tid:
+            base = dict(run[0])
+            for field in TEXT_FIELDS:
+                parts = [r[field] for r in run if r.get(field, "").strip()]
+                base[field] = "\n".join(parts)
+            merged.append(base)
+        else:
+            merged.extend(run)
+        i += len(run)
+
+    seen: dict = {}
+    for idx, row in enumerate(merged):
+        tid = row.get("test_id", "")
+        if tid:
+            seen.setdefault(tid, []).append(idx)
+    warnings = []
+    for tid, positions in seen.items():
+        if len(positions) > 1:
+            warnings.append(f"⚠ test_id '{tid}' has non-contiguous duplicate rows — review required.")
+            note = f"⚠ Duplicate test_id (non-contiguous): {tid}\n\n"
+            for pos in positions:
+                merged[pos]["description"] = note + merged[pos].get("description", "")
+    return merged, warnings
+
+
 _DEFAULT_SUPPORT_UPLOAD_DIR = "support_uploads"
 
 
@@ -346,6 +381,9 @@ def _extract_core(
             _cleanup_staged_path(tmp_path)
 
     template_used = " · ".join(templates_order) if templates_order else None
+
+    all_rows, dup_warnings = _merge_contiguous_duplicates(all_rows)
+    errors.extend(dup_warnings)
 
     return {
         "rows": all_rows,
