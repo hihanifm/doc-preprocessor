@@ -150,8 +150,8 @@ The best ask is **(1) for individuals** and **(2) for the team**. Either makes t
 When adopting these guidelines in a new project, verify every item below against the `Dockerfile`, `docker-compose.yml`, and `Makefile`. Flag anything missing as a suggestion to the user.
 
 ### Dockerfile
-- [ ] Base image uses `public.ecr.aws/docker/library/python:X.Y-slim` (not Docker Hub) — avoids pull failures on corporate networks
-- [ ] `PYTHON_IMAGE` build arg present so the registry can be overridden without editing the file
+- [ ] Base image uses `public.ecr.aws/docker/library/python:X.Y-slim` as the default — avoids pull failures on corporate networks that block Docker Hub
+- [ ] `PYTHON_IMAGE` build arg present so the registry can be overridden (e.g. `PYTHON_IMAGE=public.ecr.aws/…` or an internal mirror) without editing the file; the override should also avoid Docker Hub
 - [ ] No `# syntax=docker/dockerfile:1` directive — would force an extra Docker Hub fetch before the build starts
 - [ ] `certs/` copied and installed into the CA store; `REQUESTS_CA_BUNDLE` and `SSL_CERT_FILE` set — safe no-op when dir is empty
 - [ ] `--mount=type=cache,target=/root/.cache/pip` on the pip `RUN` — reuses wheels between rebuilds without baking them into layers
