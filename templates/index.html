@@ -564,6 +564,7 @@
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-merge" aria-selected="false" aria-controls="panel-merge" data-tab="merge">Merge sheets</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-editor" aria-selected="false" aria-controls="panel-editor" data-tab="editor">Spreadsheet editor</button>
     </div>
 
@@ -749,6 +750,35 @@
       </div>
     </div>
 
+    <div id="panel-merge" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge" hidden>
+      <div id="excel-merge">
+        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — they will be combined into a single sheet.</p>
+
+        <div id="merge-drop-zone" class="drop-zone">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Drag &amp; drop <strong>.xlsx</strong> or <strong>.xlsm</strong> files here, or <strong>click to browse</strong></p>
+          <small>Select multiple files</small>
+          <input type="file" id="merge-file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple aria-label="Choose Excel workbooks to merge" />
+        </div>
+
+        <div id="merge-file-list" style="display:none;" class="hint" style="margin-top:0.5rem;"></div>
+
+        <div class="filter-row" style="margin-top:0.75rem; align-items:center; gap:0.75rem;">
+          <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+            <input type="checkbox" id="merge-add-source" />
+            Add "Source file" column
+          </label>
+          <button type="button" class="btn btn--primary" id="merge-download-btn" disabled>Merge &amp; Download</button>
+        </div>
+
+        <div id="merge-error" style="display:none; margin-top:0.75rem;"></div>
+      </div>
+    </div>
+
     <div id="panel-editor" class="tab-panel" role="tabpanel" aria-labelledby="tab-editor" hidden>
       <div id="ss-editor">
         <div class="local-warning" id="ss-editor-local-banner">
@@ -811,6 +841,8 @@
       'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';
     const SUBTITLE_EXCEL =
       'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
+    const SUBTITLE_MERGE =
+      'Merge sheets: combine multiple .xlsx files with identical columns into one workbook.';
     const SUBTITLE_EDITOR =
       'Spreadsheet editor: open a workbook in your browser only — paginate, edit cells, mark rows to remove, download a new .xlsx.';
 
@@ -823,8 +855,10 @@
         });
         document.getElementById('panel-converter').hidden = tab !== 'converter';
         document.getElementById('panel-excel').hidden = tab !== 'excel';
+        document.getElementById('panel-merge').hidden = tab !== 'merge';
         document.getElementById('panel-editor').hidden = tab !== 'editor';
         if (tab === 'excel') pageSubtitle.textContent = SUBTITLE_EXCEL;
+        else if (tab === 'merge') pageSubtitle.textContent = SUBTITLE_MERGE;
         else if (tab === 'editor') pageSubtitle.textContent = SUBTITLE_EDITOR;
         else pageSubtitle.textContent = SUBTITLE_CONVERTER;
       });
@@ -2171,6 +2205,73 @@
         a.click();
         URL.revokeObjectURL(url);
         setSsStatus(`Downloaded ${a.download} (${out.length - 1} data rows).`, 'ok');
+      });
+    })();
+
+    // ── Merge sheets ──────────────────────────────────────────────────────────
+    (() => {
+      const dropZone = document.getElementById('merge-drop-zone');
+      const fileInput = document.getElementById('merge-file');
+      const fileList  = document.getElementById('merge-file-list');
+      const addSource = document.getElementById('merge-add-source');
+      const mergeBtn  = document.getElementById('merge-download-btn');
+      const errorBox  = document.getElementById('merge-error');
+
+      let pickedFiles = null;
+
+      function setFiles(files) {
+        pickedFiles = files && files.length ? files : null;
+        if (pickedFiles) {
+          const names = Array.from(pickedFiles).map(f => esc(f.name)).join(', ');
+          fileList.innerHTML = `<strong>${pickedFiles.length} file${pickedFiles.length > 1 ? 's' : ''}:</strong> ${names}`;
+          fileList.style.display = '';
+        } else {
+          fileList.style.display = 'none';
+        }
+        mergeBtn.disabled = !pickedFiles || pickedFiles.length < 2;
+        errorBox.style.display = 'none';
+      }
+
+      dropZone.addEventListener('click', () => fileInput.click());
+      dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drop-zone--over'); });
+      dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drop-zone--over'));
+      dropZone.addEventListener('drop', e => {
+        e.preventDefault();
+        dropZone.classList.remove('drop-zone--over');
+        setFiles(e.dataTransfer.files);
+      });
+      fileInput.addEventListener('change', () => setFiles(fileInput.files));
+
+      mergeBtn.addEventListener('click', async () => {
+        if (!pickedFiles || pickedFiles.length < 2) return;
+        errorBox.style.display = 'none';
+        mergeBtn.disabled = true;
+        mergeBtn.textContent = 'Merging…';
+        try {
+          const fd = new FormData();
+          Array.from(pickedFiles).forEach(f => fd.append('files', f));
+          if (addSource.checked) fd.append('add_source', '1');
+          const res = await fetch('/excel/merge', { method: 'POST', body: fd });
+          if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'merged.xlsx';
+            a.click();
+            URL.revokeObjectURL(url);
+          } else {
+            const data = await res.json().catch(() => ({ error: 'Unexpected server error.' }));
+            errorBox.innerHTML = `<div class="error-item">${esc(data.error || 'Merge failed.')}</div>`;
+            errorBox.style.display = '';
+          }
+        } catch (err) {
+          errorBox.innerHTML = `<div class="error-item">${esc(err.message)}</div>`;
+          errorBox.style.display = '';
+        } finally {
+          mergeBtn.disabled = false;
+          mergeBtn.textContent = 'Merge & Download';
+        }
       });
     })();
   </script>

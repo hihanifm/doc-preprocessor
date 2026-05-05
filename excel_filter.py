@@ -223,3 +223,31 @@ def dict_rows_to_xlsx_bytes(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def merge_xlsx_to_bytes(paths: List[str], filenames: List[str], add_source: bool = False) -> bytes:
+    """Merge first sheet of each xlsx into one workbook. Raises ValueError if headers differ."""
+    reference_headers: Optional[List[str]] = None
+    all_rows: List[Dict] = []
+
+    for path, fname in zip(paths, filenames):
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        ws = wb.worksheets[0]
+        it = ws.iter_rows(values_only=True)
+        headers = [normalize_cell(h) for h in next(it, [])]
+        if reference_headers is None:
+            reference_headers = headers
+        elif headers != reference_headers:
+            raise ValueError(f"'{fname}' columns don't match the first file.")
+        for row in it:
+            d = {h: normalize_cell(v) for h, v in zip(reference_headers, row)}
+            if add_source:
+                d["Source file"] = fname
+            all_rows.append(d)
+        wb.close()
+
+    if not reference_headers:
+        raise ValueError("No data found in uploaded files.")
+
+    out_headers = (["Source file"] + reference_headers) if add_source else reference_headers
+    return dict_rows_to_xlsx_bytes(all_rows, out_headers)

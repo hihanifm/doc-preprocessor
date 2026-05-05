@@ -65,6 +65,7 @@ def _extract_reject(msg: str, *, req_id: str = "-"):
 
 from excel_filter import (
     filter_xlsx_to_bytes,
+    merge_xlsx_to_bytes,
     peek_distinct,
     sample_sheet_rows,
     workbook_sheet_info,
@@ -880,6 +881,39 @@ def excel_download_filtered():
         return jsonify({"error": str(e)}), 500
     finally:
         _cleanup_tmp(tmp_path)
+
+
+@app.route("/excel/merge", methods=["POST"])
+def excel_merge():
+    """Merge multiple .xlsx/.xlsm files (first sheet each) into one workbook."""
+    files = request.files.getlist("files")
+    if len(files) < 2:
+        return jsonify({"error": "Upload at least 2 files to merge."}), 400
+    add_source = request.form.get("add_source") == "1"
+    tmp_paths: list[str] = []
+    filenames: list[str] = []
+    try:
+        for f in files:
+            ext = os.path.splitext(f.filename or "")[1].lower()
+            if ext not in (".xlsx", ".xlsm"):
+                return jsonify({"error": f"'{f.filename}' is not an .xlsx/.xlsm file."}), 400
+            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+                f.save(tmp.name)
+                tmp_paths.append(tmp.name)
+            filenames.append(f.filename)
+        data = merge_xlsx_to_bytes(tmp_paths, filenames, add_source=add_source)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        for p in tmp_paths:
+            _cleanup_tmp(p)
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=merged.xlsx"},
+    )
 
 
 @app.route("/samples/<path:filename>")
