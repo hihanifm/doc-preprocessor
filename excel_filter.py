@@ -251,3 +251,41 @@ def merge_xlsx_to_bytes(paths: List[str], filenames: List[str], add_source: bool
 
     out_headers = (["Source file"] + reference_headers) if add_source else reference_headers
     return dict_rows_to_xlsx_bytes(all_rows, out_headers)
+
+
+def join_xlsx_to_bytes(target_path: str, source_path: str, key_col: str, columns_to_copy: List[str]) -> bytes:
+    """LEFT JOIN target with source on key_col; copy selected columns. First source match wins."""
+    src_wb = openpyxl.load_workbook(source_path, read_only=True, data_only=True)
+    src_ws = src_wb.worksheets[0]
+    src_it = src_ws.iter_rows(values_only=True)
+    src_headers = [normalize_cell(h) for h in next(src_it, [])]
+    if key_col not in src_headers:
+        raise ValueError(f"Key column '{key_col}' not found in source file.")
+    src_key_idx = src_headers.index(key_col)
+    lookup: Dict = {}
+    for row in src_it:
+        k = normalize_cell(row[src_key_idx])
+        if k and k not in lookup:
+            lookup[k] = {src_headers[i]: normalize_cell(v) for i, v in enumerate(row)}
+    src_wb.close()
+
+    tgt_wb = openpyxl.load_workbook(target_path, read_only=True, data_only=True)
+    tgt_ws = tgt_wb.worksheets[0]
+    tgt_it = tgt_ws.iter_rows(values_only=True)
+    tgt_headers = [normalize_cell(h) for h in next(tgt_it, [])]
+    if key_col not in tgt_headers:
+        raise ValueError(f"Key column '{key_col}' not found in target file.")
+
+    extra = [c for c in columns_to_copy if c not in tgt_headers]
+    out_headers = tgt_headers + extra
+
+    all_rows = []
+    for row in tgt_it:
+        d = {tgt_headers[i]: normalize_cell(v) for i, v in enumerate(row)}
+        src_row = lookup.get(d.get(key_col, ""), {})
+        for col in columns_to_copy:
+            d[col] = src_row.get(col, "")
+        all_rows.append(d)
+    tgt_wb.close()
+
+    return dict_rows_to_xlsx_bytes(all_rows, out_headers)

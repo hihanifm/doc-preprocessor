@@ -777,6 +777,37 @@
 
         <div id="merge-error" style="display:none; margin-top:0.75rem;"></div>
       </div>
+
+      <hr style="margin:1.5rem 0; border:none; border-top:1px solid #ddd;">
+
+      <div id="excel-join">
+        <p class="hint"><strong>Enrich with lookup (JOIN)</strong> — pick a target and a source file that share a common key column. Select which source columns to copy across.</p>
+
+        <div class="filter-row" style="gap:0.75rem; flex-wrap:wrap;">
+          <label style="display:flex; flex-direction:column; gap:0.25rem; flex:1; min-width:180px;">
+            <span class="hint" style="margin:0;">Target file</span>
+            <input type="file" id="join-target-file" accept=".xlsx,.xlsm" />
+          </label>
+          <label style="display:flex; flex-direction:column; gap:0.25rem; flex:1; min-width:180px;">
+            <span class="hint" style="margin:0;">Source file</span>
+            <input type="file" id="join-source-file" accept=".xlsx,.xlsm" />
+          </label>
+        </div>
+
+        <div id="join-controls" style="display:none; margin-top:0.75rem;">
+          <div class="filter-row" style="align-items:center; gap:0.75rem;">
+            <label for="join-key-col" class="hint" style="margin:0; white-space:nowrap;">Key column</label>
+            <select id="join-key-col" style="flex:1;"></select>
+          </div>
+          <div id="join-col-list" style="margin-top:0.75rem;"></div>
+          <div style="margin-top:0.75rem;">
+            <button type="button" class="btn btn--primary" id="join-download-btn" disabled>Enrich &amp; Download</button>
+          </div>
+        </div>
+
+        <div id="join-error" style="display:none; margin-top:0.75rem;"></div>
+      </div>
+    </div>
     </div>
 
     <div id="panel-editor" class="tab-panel" role="tabpanel" aria-labelledby="tab-editor" hidden>
@@ -2271,6 +2302,105 @@
         } finally {
           mergeBtn.disabled = false;
           mergeBtn.textContent = 'Merge & Download';
+        }
+      });
+    })();
+
+    // ── Enrich with lookup (JOIN) ─────────────────────────────────────────────
+    (() => {
+      const targetInput  = document.getElementById('join-target-file');
+      const sourceInput  = document.getElementById('join-source-file');
+      const controls     = document.getElementById('join-controls');
+      const keySelect    = document.getElementById('join-key-col');
+      const colList      = document.getElementById('join-col-list');
+      const downloadBtn  = document.getElementById('join-download-btn');
+      const errorBox     = document.getElementById('join-error');
+
+      let targetFile = null, sourceFile = null, sourceCols = [];
+
+      async function fetchCols(file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('sheet_index', '0');
+        const r = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
+        const d = await r.json();
+        if (d.error) throw new Error(d.error);
+        return d.columns;
+      }
+
+      async function refresh() {
+        errorBox.style.display = 'none';
+        if (!targetFile || !sourceFile) { controls.style.display = 'none'; return; }
+        try {
+          const [tgtCols, srcCols] = await Promise.all([fetchCols(targetFile), fetchCols(sourceFile)]);
+          sourceCols = srcCols;
+
+          keySelect.innerHTML = tgtCols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+
+          const keyed = keySelect.value;
+          colList.innerHTML = '<p class="hint" style="margin:0 0 0.4rem;">Source columns to copy:</p>' +
+            srcCols.filter(c => c !== keyed).map(c =>
+              `<label style="display:block; margin:0.2rem 0;">
+                <input type="checkbox" class="join-col-cb" value="${esc(c)}"> ${esc(c)}
+              </label>`
+            ).join('');
+
+          controls.style.display = '';
+          updateBtn();
+        } catch (e) {
+          errorBox.innerHTML = `<div class="error-item">${esc(e.message)}</div>`;
+          errorBox.style.display = '';
+          controls.style.display = 'none';
+        }
+      }
+
+      function updateBtn() {
+        const anyChecked = colList.querySelectorAll('.join-col-cb:checked').length > 0;
+        downloadBtn.disabled = !anyChecked;
+      }
+
+      keySelect.addEventListener('change', () => {
+        const keyed = keySelect.value;
+        colList.querySelectorAll('.join-col-cb').forEach(cb => {
+          cb.closest('label').style.display = cb.value === keyed ? 'none' : 'block';
+        });
+        updateBtn();
+      });
+      colList.addEventListener('change', updateBtn);
+
+      targetInput.addEventListener('change', () => { targetFile = targetInput.files[0] || null; refresh(); });
+      sourceInput.addEventListener('change', () => { sourceFile = sourceInput.files[0] || null; refresh(); });
+
+      downloadBtn.addEventListener('click', async () => {
+        errorBox.style.display = 'none';
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = 'Enriching…';
+        try {
+          const fd = new FormData();
+          fd.append('target', targetFile);
+          fd.append('source', sourceFile);
+          fd.append('key_col', keySelect.value);
+          colList.querySelectorAll('.join-col-cb:checked').forEach(cb => fd.append('columns', cb.value));
+          const res = await fetch('/excel/join', { method: 'POST', body: fd });
+          if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = (targetFile.name.replace(/\.[^.]+$/, '') || 'enriched') + '_enriched.xlsx';
+            a.click();
+            URL.revokeObjectURL(url);
+          } else {
+            const data = await res.json().catch(() => ({ error: 'Unexpected server error.' }));
+            errorBox.innerHTML = `<div class="error-item">${esc(data.error || 'Join failed.')}</div>`;
+            errorBox.style.display = '';
+          }
+        } catch (err) {
+          errorBox.innerHTML = `<div class="error-item">${esc(err.message)}</div>`;
+          errorBox.style.display = '';
+        } finally {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = 'Enrich & Download';
         }
       });
     })();

@@ -65,6 +65,7 @@ def _extract_reject(msg: str, *, req_id: str = "-"):
 
 from excel_filter import (
     filter_xlsx_to_bytes,
+    join_xlsx_to_bytes,
     merge_xlsx_to_bytes,
     peek_distinct,
     sample_sheet_rows,
@@ -913,6 +914,49 @@ def excel_merge():
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=merged.xlsx"},
+    )
+
+
+@app.route("/excel/join", methods=["POST"])
+def excel_join():
+    """Enrich target xlsx with columns from source xlsx, matched on a key column (LEFT JOIN)."""
+    target_f = request.files.get("target")
+    source_f = request.files.get("source")
+    key_col = (request.form.get("key_col") or "").strip()
+    columns_to_copy = request.form.getlist("columns")
+
+    if not target_f or not source_f:
+        return jsonify({"error": "Upload both a target and a source file."}), 400
+    if not key_col:
+        return jsonify({"error": "key_col is required."}), 400
+    if not columns_to_copy:
+        return jsonify({"error": "Select at least one column to copy."}), 400
+    for f in (target_f, source_f):
+        if os.path.splitext(f.filename or "")[1].lower() not in (".xlsx", ".xlsm"):
+            return jsonify({"error": f"'{f.filename}' is not an .xlsx/.xlsm file."}), 400
+
+    target_tmp = source_tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as t:
+            target_f.save(t.name)
+            target_tmp = t.name
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as t:
+            source_f.save(t.name)
+            source_tmp = t.name
+        data = join_xlsx_to_bytes(target_tmp, source_tmp, key_col, columns_to_copy)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        _cleanup_tmp(target_tmp)
+        _cleanup_tmp(source_tmp)
+
+    base = os.path.splitext(target_f.filename)[0] or "enriched"
+    return Response(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={base}_enriched.xlsx"},
     )
 
 
