@@ -1888,6 +1888,22 @@
             `<div class="llm-live-progress__sub">${esc(payload.title || '')}</div>` +
             `<div class="llm-live-progress__sub">${esc(payload.error || '')}</div>`
           );
+        case 'llm_retry': {
+          const na = payload.next_attempt != null ? esc(String(payload.next_attempt)) : '';
+          const ma = payload.max_attempts != null ? esc(String(payload.max_attempts)) : '3';
+          const bs = payload.backoff_sec != null ? esc(String(payload.backoff_sec)) : '';
+          const err = esc(payload.error || 'transient LLM error');
+          const sec =
+            payload.section_title
+              ? `<div class="llm-live-progress__sub">${esc(payload.section_title)}</div>`
+              : '';
+          return (
+            `<div class="llm-live-progress__line" style="color:#b45309;">Transient LLM error · next attempt ${na}/${ma} in ${bs}s…</div>` +
+            `<div class="llm-live-progress__sub">${err}</div>` +
+            sec +
+            `<div class="llm-live-progress__sub">${fname}</div>`
+          );
+        }
         case 'whole_llm':
           if (payload.phase === 'request') {
             return (

@@ -378,6 +378,13 @@ def _sleep_backoff(attempt: int) -> None:
     time.sleep(10 * (2**attempt))
 
 
+def _truncate_ui_err(msg: str, limit: int = 220) -> str:
+    s = (msg or "").replace("\n", " ").strip()
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 1)] + "…"
+
+
 def _is_retryable_llm_server_error(err: Exception) -> bool:
     s = str(err)
     # We only retry "server-ish" failures. This is intentionally conservative: user input
@@ -397,16 +404,47 @@ def _is_retryable_llm_server_error(err: Exception) -> bool:
     )
 
 
-def _with_llm_retries(fn: Callable[[], Any]) -> Any:
+def _with_llm_retries(
+    fn: Callable[[], Any],
+    *,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+    file_name: str = "",
+    section_title: str | None = None,
+) -> Any:
     last: Exception | None = None
-    for attempt in range(3):  # initial + 2 retries
+    max_attempts = 3  # initial + 2 retries
+    for attempt in range(max_attempts):
         try:
             return fn()
         except LlmExtractError as e:
             last = e
-            if attempt >= 2 or not _is_retryable_llm_server_error(e):
+            if attempt >= max_attempts - 1 or not _is_retryable_llm_server_error(e):
                 raise
-            log.warning("LLM server error (attempt %d/3): %s; backing off", attempt + 1, e)
+            backoff_sec = 10 * (2**attempt)
+            log.warning(
+                "LLM transient error (attempt %d/%d): %s; backing off %ds",
+                attempt + 1,
+                max_attempts,
+                e,
+                backoff_sec,
+            )
+            if progress:
+                title_disp = ""
+                if section_title:
+                    td = section_title if len(section_title) <= 160 else section_title[:157] + "…"
+                    title_disp = td
+                progress(
+                    {
+                        "step": "llm_retry",
+                        "file": file_name,
+                        "section_title": title_disp or None,
+                        "failed_attempt": attempt + 1,
+                        "next_attempt": attempt + 2,
+                        "max_attempts": max_attempts,
+                        "error": _truncate_ui_err(str(e)),
+                        "backoff_sec": backoff_sec,
+                    }
+                )
             _sleep_backoff(attempt)
     assert last is not None
     raise last
@@ -628,7 +666,12 @@ def _extract_with_llm_single_pass(
 
             return content
 
-        content = _with_llm_retries(_do_call)
+        content = _with_llm_retries(
+            _do_call,
+            progress=progress,
+            file_name=file_name,
+            section_title=section_title,
+        )
 
         if not content.strip():
             raise LlmExtractError("LLM returned empty content.")
@@ -825,7 +868,7 @@ def extract_with_llm_by_sections(
                 stream=use_stream,
                 section_title=title,
                 user_hints=uh or None,
-                progress=None,
+                progress=progress,
             )
         except LlmExtractError as e:
             msg = f'Section "{title_disp}": {e}'
@@ -901,7 +944,8 @@ def extract_with_llm(
     In section mode, a section with an empty body but a VZ_TC_* id in the title yields a placeholder Excel row
     (no LLM call); see extract_vz_tc_id in llm_document_filter.
 
-    Retries: transient server/network failures get 2 exponential backoffs.
+    Retries: transient server/network failures get 2 exponential backoffs (10s then 20s). When a progress
+    callback is provided, step \"llm_retry\" events include the error summary and next attempt countdown for the UI.
     """
     doc_text, prep_meta = prepare_text_for_llm(doc_text)
     if prep_meta.get("llm_prep_stripped"):

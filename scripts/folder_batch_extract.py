@@ -146,6 +146,12 @@ def _format_ndjson_progress_line(data: dict[str, Any]) -> str | None:
             return "whole-document LLM request…"
         if data.get("phase") == "done":
             return f"whole-document done · {data.get('rows_found', 0)} row(s)"
+    if step == "llm_retry":
+        na = data.get("next_attempt")
+        ma = data.get("max_attempts")
+        bs = data.get("backoff_sec")
+        err = (data.get("error") or "")[:160]
+        return f"retry next {na}/{ma} in {bs}s — {err}"
     return None
 
 
