@@ -875,11 +875,12 @@ def excel_download_filtered():
 
 @app.route("/excel/merge", methods=["POST"])
 def excel_merge():
-    """Merge multiple .xlsx/.xlsm files (first sheet each) into one workbook."""
+    """Merge multiple .xlsx/.xlsm files (same sheet index in each workbook) into one workbook."""
     files = request.files.getlist("files")
     if len(files) < 2:
         return jsonify({"error": "Upload at least 2 files to merge."}), 400
     add_source = request.form.get("add_source") == "1"
+    sheet_index = int(request.form.get("sheet_index", 0))
     tmp_paths: list[str] = []
     filenames: list[str] = []
     try:
@@ -891,7 +892,9 @@ def excel_merge():
                 f.save(tmp.name)
                 tmp_paths.append(tmp.name)
             filenames.append(f.filename)
-        data = merge_xlsx_to_bytes(tmp_paths, filenames, add_source=add_source)
+        data = merge_xlsx_to_bytes(
+            tmp_paths, filenames, add_source=add_source, sheet_index=sheet_index
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -932,7 +935,16 @@ def excel_join():
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as t:
             source_f.save(t.name)
             source_tmp = t.name
-        data = join_xlsx_to_bytes(target_tmp, source_tmp, key_col, columns_to_copy)
+        target_sheet_index = int(request.form.get("target_sheet_index", 0))
+        source_sheet_index = int(request.form.get("source_sheet_index", 0))
+        data = join_xlsx_to_bytes(
+            target_tmp,
+            source_tmp,
+            key_col,
+            columns_to_copy,
+            target_sheet_index=target_sheet_index,
+            source_sheet_index=source_sheet_index,
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:

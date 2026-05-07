@@ -225,14 +225,25 @@ def dict_rows_to_xlsx_bytes(
     return buf.getvalue()
 
 
-def merge_xlsx_to_bytes(paths: List[str], filenames: List[str], add_source: bool = False) -> bytes:
-    """Merge first sheet of each xlsx into one workbook. Raises ValueError if headers differ."""
+def merge_xlsx_to_bytes(
+    paths: List[str],
+    filenames: List[str],
+    add_source: bool = False,
+    sheet_index: int = 0,
+) -> bytes:
+    """Merge the worksheet at sheet_index from each xlsx into one workbook. Raises ValueError if headers differ."""
     reference_headers: Optional[List[str]] = None
     all_rows: List[Dict] = []
 
     for path, fname in zip(paths, filenames):
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        ws = wb.worksheets[0]
+        names = wb.sheetnames
+        if sheet_index < 0 or sheet_index >= len(names):
+            wb.close()
+            raise ValueError(
+                f"'{fname}': sheet index {sheet_index} out of range ({len(names)} sheet(s))."
+            )
+        ws = wb[names[sheet_index]]
         it = ws.iter_rows(values_only=True)
         headers = [normalize_cell(h) for h in next(it, [])]
         if reference_headers is None:
@@ -253,10 +264,24 @@ def merge_xlsx_to_bytes(paths: List[str], filenames: List[str], add_source: bool
     return dict_rows_to_xlsx_bytes(all_rows, out_headers)
 
 
-def join_xlsx_to_bytes(target_path: str, source_path: str, key_col: str, columns_to_copy: List[str]) -> bytes:
+def join_xlsx_to_bytes(
+    target_path: str,
+    source_path: str,
+    key_col: str,
+    columns_to_copy: List[str],
+    *,
+    target_sheet_index: int = 0,
+    source_sheet_index: int = 0,
+) -> bytes:
     """LEFT JOIN target with source on key_col; copy selected columns. First source match wins."""
     src_wb = openpyxl.load_workbook(source_path, read_only=True, data_only=True)
-    src_ws = src_wb.worksheets[0]
+    src_names = src_wb.sheetnames
+    if source_sheet_index < 0 or source_sheet_index >= len(src_names):
+        src_wb.close()
+        raise ValueError(
+            f"Invalid source sheet index {source_sheet_index} ({len(src_names)} sheet(s))."
+        )
+    src_ws = src_wb[src_names[source_sheet_index]]
     src_it = src_ws.iter_rows(values_only=True)
     src_headers = [normalize_cell(h) for h in next(src_it, [])]
     if key_col not in src_headers:
@@ -270,7 +295,13 @@ def join_xlsx_to_bytes(target_path: str, source_path: str, key_col: str, columns
     src_wb.close()
 
     tgt_wb = openpyxl.load_workbook(target_path, read_only=True, data_only=True)
-    tgt_ws = tgt_wb.worksheets[0]
+    tgt_names = tgt_wb.sheetnames
+    if target_sheet_index < 0 or target_sheet_index >= len(tgt_names):
+        tgt_wb.close()
+        raise ValueError(
+            f"Invalid target sheet index {target_sheet_index} ({len(tgt_names)} sheet(s))."
+        )
+    tgt_ws = tgt_wb[tgt_names[target_sheet_index]]
     tgt_it = tgt_ws.iter_rows(values_only=True)
     tgt_headers = [normalize_cell(h) for h in next(tgt_it, [])]
     if key_col not in tgt_headers:

@@ -753,7 +753,7 @@
 
     <div id="panel-merge-rows" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge-rows" hidden>
       <div id="excel-merge">
-        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — all rows are stacked into one sheet.</p>
+        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — all rows are stacked into one sheet. The same workbook <strong>sheet position</strong> (first, second, …) is used for every file.</p>
 
         <div id="merge-drop-zone" class="drop-zone">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
@@ -768,7 +768,11 @@
 
         <div id="merge-file-list" style="display:none;" class="hint" style="margin-top:0.5rem;"></div>
 
-        <div class="filter-row" style="margin-top:0.75rem; align-items:center; gap:0.75rem;">
+        <div class="filter-row" style="margin-top:0.75rem; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+          <label id="merge-sheet-wrap" style="display:none; align-items:center; gap:0.4rem; margin:0; flex-wrap:wrap;">
+            <span class="hint" style="margin:0; white-space:nowrap;">Sheet</span>
+            <select id="merge-sheet" aria-label="Sheet position to merge from each workbook"></select>
+          </label>
           <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
             <input type="checkbox" id="merge-add-source" />
             Add "Source file" column
@@ -796,7 +800,13 @@
         </div>
 
         <div id="join-controls" style="display:none; margin-top:0.75rem;">
-          <div class="filter-row" style="align-items:center; gap:0.75rem;">
+          <div class="filter-row" style="align-items:center; gap:0.75rem; flex-wrap:wrap;">
+            <label for="join-target-sheet" class="hint" style="margin:0; white-space:nowrap;">Target sheet</label>
+            <select id="join-target-sheet" aria-label="Target worksheet"></select>
+            <label for="join-source-sheet" class="hint" style="margin:0; white-space:nowrap;">Source sheet</label>
+            <select id="join-source-sheet" aria-label="Source worksheet"></select>
+          </div>
+          <div class="filter-row" style="align-items:center; gap:0.75rem; margin-top:0.75rem;">
             <label for="join-key-col" class="hint" style="margin:0; white-space:nowrap;">Key column</label>
             <select id="join-key-col" style="flex:1;"></select>
           </div>
@@ -1174,6 +1184,10 @@
     const excelFileDisplay = document.getElementById('excel-file-display');
     let excelFile = null;
 
+    function excelChosenSheetIndex() {
+      return excelSheet.options.length ? excelSheet.value : '0';
+    }
+
     function syncExcelFileLabel() {
       const picked = document.getElementById('excel-file-picked');
       if (excelFile) {
@@ -1230,7 +1244,7 @@
         opt.textContent = name;
         excelSheet.appendChild(opt);
       });
-      excelSheet.style.display = d.sheet_names.length > 1 ? 'inline-block' : 'none';
+      excelSheet.style.display = 'inline-block';
       excelSheet.value = String(sheetIndex);
 
       excelColumn.innerHTML = '';
@@ -1273,7 +1287,7 @@
       try {
         const fd = new FormData();
         fd.append('file', excelFile);
-        fd.append('sheet_index', excelSheet.style.display === 'none' ? '0' : excelSheet.value);
+        fd.append('sheet_index', excelChosenSheetIndex());
         fd.append('limit', '15');
         const r = await fetch('/excel/sample-rows', { method: 'POST', body: fd });
         const d = await r.json();
@@ -1319,7 +1333,7 @@
         const fd = new FormData();
         fd.append('file', excelFile);
         fd.append('column', excelColumn.value);
-        fd.append('sheet_index', excelSheet.style.display === 'none' ? '0' : excelSheet.value);
+        fd.append('sheet_index', excelChosenSheetIndex());
         const r = await fetch('/excel/peek-column', { method: 'POST', body: fd });
         const d = await r.json();
         if (d.error) throw new Error(d.error);
@@ -1343,7 +1357,7 @@
         fd.append('column', excelColumn.value);
         fd.append('mode', excelMode.value);
         fd.append('value', excelNeedle.value);
-        fd.append('sheet_index', excelSheet.style.display === 'none' ? '0' : excelSheet.value);
+        fd.append('sheet_index', excelChosenSheetIndex());
         const resp = await fetch('/excel/download-filtered', { method: 'POST', body: fd });
         const ct = resp.headers.get('Content-Type') || '';
         if (!resp.ok) {
@@ -2246,10 +2260,41 @@
       const fileInput = document.getElementById('merge-file');
       const fileList  = document.getElementById('merge-file-list');
       const addSource = document.getElementById('merge-add-source');
+      const mergeSheetWrap = document.getElementById('merge-sheet-wrap');
+      const mergeSheet = document.getElementById('merge-sheet');
       const mergeBtn  = document.getElementById('merge-download-btn');
       const errorBox  = document.getElementById('merge-error');
 
       let pickedFiles = null;
+
+      async function refreshMergeSheetList() {
+        errorBox.style.display = 'none';
+        mergeSheetWrap.style.display = 'none';
+        mergeSheet.innerHTML = '';
+        mergeBtn.disabled = true;
+        if (!pickedFiles || pickedFiles.length < 2) {
+          return;
+        }
+        try {
+          const fd = new FormData();
+          fd.append('file', pickedFiles[0]);
+          fd.append('sheet_index', '0');
+          const res = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
+          const d = await res.json();
+          if (d.error) throw new Error(d.error);
+          d.sheet_names.forEach((name, idx) => {
+            const opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.textContent = name;
+            mergeSheet.appendChild(opt);
+          });
+          mergeSheetWrap.style.display = 'inline-flex';
+          mergeBtn.disabled = false;
+        } catch (e) {
+          errorBox.innerHTML = `<div class="error-item">${esc(e.message)}</div>`;
+          errorBox.style.display = '';
+        }
+      }
 
       function setFiles(files) {
         pickedFiles = files && files.length ? files : null;
@@ -2260,8 +2305,8 @@
         } else {
           fileList.style.display = 'none';
         }
-        mergeBtn.disabled = !pickedFiles || pickedFiles.length < 2;
         errorBox.style.display = 'none';
+        void refreshMergeSheetList();
       }
 
       dropZone.addEventListener('click', () => fileInput.click());
@@ -2283,6 +2328,7 @@
           const fd = new FormData();
           Array.from(pickedFiles).forEach(f => fd.append('files', f));
           if (addSource.checked) fd.append('add_source', '1');
+          if (mergeSheet.options.length) fd.append('sheet_index', mergeSheet.value);
           const res = await fetch('/excel/merge', { method: 'POST', body: fd });
           if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
             const blob = await res.blob();
@@ -2312,6 +2358,8 @@
       const targetInput  = document.getElementById('join-target-file');
       const sourceInput  = document.getElementById('join-source-file');
       const controls     = document.getElementById('join-controls');
+      const targetSheetSel = document.getElementById('join-target-sheet');
+      const sourceSheetSel = document.getElementById('join-source-sheet');
       const keySelect    = document.getElementById('join-key-col');
       const colList      = document.getElementById('join-col-list');
       const downloadBtn  = document.getElementById('join-download-btn');
@@ -2319,21 +2367,45 @@
 
       let targetFile = null, sourceFile = null, sourceCols = [];
 
-      async function fetchCols(file) {
+      async function fetchSheetInfo(file, sheetIndex) {
         const fd = new FormData();
         fd.append('file', file);
-        fd.append('sheet_index', '0');
+        fd.append('sheet_index', String(sheetIndex));
         const r = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
         const d = await r.json();
         if (d.error) throw new Error(d.error);
-        return d.columns;
+        return { columns: d.columns, sheet_names: d.sheet_names };
+      }
+
+      function fillSheetOpts(sel, names) {
+        const prev = parseInt(sel.value, 10);
+        sel.innerHTML = '';
+        names.forEach((name, idx) => {
+          const opt = document.createElement('option');
+          opt.value = String(idx);
+          opt.textContent = name;
+          sel.appendChild(opt);
+        });
+        const pick = !Number.isNaN(prev) && prev >= 0 && prev < names.length ? prev : 0;
+        sel.value = String(pick);
       }
 
       async function refresh() {
         errorBox.style.display = 'none';
         if (!targetFile || !sourceFile) { controls.style.display = 'none'; return; }
         try {
-          const [tgtCols, srcCols] = await Promise.all([fetchCols(targetFile), fetchCols(sourceFile)]);
+          const t0 = await fetchSheetInfo(targetFile, 0);
+          fillSheetOpts(targetSheetSel, t0.sheet_names);
+          const tgtIdx = parseInt(targetSheetSel.value, 10) || 0;
+          let tgtCols = t0.columns;
+          if (tgtIdx !== 0) tgtCols = (await fetchSheetInfo(targetFile, tgtIdx)).columns;
+
+          const s0 = await fetchSheetInfo(sourceFile, 0);
+          fillSheetOpts(sourceSheetSel, s0.sheet_names);
+          const srcIdx = parseInt(sourceSheetSel.value, 10) || 0;
+          let srcCols = s0.columns;
+          if (srcIdx !== 0) srcCols = (await fetchSheetInfo(sourceFile, srcIdx)).columns;
+
           sourceCols = srcCols;
 
           keySelect.innerHTML = tgtCols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
@@ -2369,8 +2441,11 @@
       });
       colList.addEventListener('change', updateBtn);
 
-      targetInput.addEventListener('change', () => { targetFile = targetInput.files[0] || null; refresh(); });
-      sourceInput.addEventListener('change', () => { sourceFile = sourceInput.files[0] || null; refresh(); });
+      targetSheetSel.addEventListener('change', () => { void refresh(); });
+      sourceSheetSel.addEventListener('change', () => { void refresh(); });
+
+      targetInput.addEventListener('change', () => { targetFile = targetInput.files[0] || null; void refresh(); });
+      sourceInput.addEventListener('change', () => { sourceFile = sourceInput.files[0] || null; void refresh(); });
 
       downloadBtn.addEventListener('click', async () => {
         errorBox.style.display = 'none';
@@ -2381,6 +2456,8 @@
           fd.append('target', targetFile);
           fd.append('source', sourceFile);
           fd.append('key_col', keySelect.value);
+          fd.append('target_sheet_index', targetSheetSel.value);
+          fd.append('source_sheet_index', sourceSheetSel.value);
           colList.querySelectorAll('.join-col-cb:checked').forEach(cb => fd.append('columns', cb.value));
           const res = await fetch('/excel/join', { method: 'POST', body: fd });
           if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
