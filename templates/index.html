@@ -758,6 +758,10 @@
       Keep this tab open while extraction runs so you can monitor progress and status.
       Very large documents may fail because of LLM request timeouts; split the source into smaller files when you can, or use <strong>By section</strong> so each model call handles a smaller chunk.
     </p>
+    <p class="hint">
+      Extraction is a best-effort, best-case pipeline — incorrect parsing or row content is always possible.
+      Please review the preview and spreadsheet after extraction before you rely on it for compliance or sign-off.
+    </p>
 
     <div class="btn-row">
       <button type="button" class="btn btn--primary" id="extract-btn" disabled>Extract Test Cases</button>
