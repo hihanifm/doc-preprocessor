@@ -1016,25 +1016,92 @@
     const SUBTITLE_EDITOR =
       'Spreadsheet editor: open a workbook in your browser only — paginate, edit cells, mark rows to remove, download a new .xlsx.';
 
+    /** URL fragment (#…) for bookmarking each main tab; click updates the address bar. */
+    const TAB_HASH_FRAGMENT = {
+      converter: 'test-case-extractor',
+      excel: 'spreadsheet-shrinker',
+      'merge-rows': 'row-merger',
+      'merge-cols': 'column-merger',
+      editor: 'spreadsheet-editor',
+    };
+    const TAB_KEY_BY_HASH_FRAG = {
+      'test-case-extractor': 'converter',
+      'spreadsheet-shrinker': 'excel',
+      'row-merger': 'merge-rows',
+      'column-merger': 'merge-cols',
+      'spreadsheet-editor': 'editor',
+      converter: 'converter',
+      excel: 'excel',
+      'merge-rows': 'merge-rows',
+      'merge-columns': 'merge-cols',
+      'merge-cols': 'merge-cols',
+      editor: 'editor',
+    };
+
     const pageSubtitle = document.getElementById('page-subtitle');
+
+    function normalizeRawHashFragment(hash) {
+      let s = (hash || '').replace(/^#/, '').trim();
+      if (!s) return '';
+      s = s.replace(/^\/+/, '').replace(/\/+$/, '');
+      try {
+        s = decodeURIComponent(s);
+      } catch (_) {
+        /* keep raw */
+      }
+      return s;
+    }
+
+    function fragToTabKey(frag) {
+      if (!frag) return null;
+      return TAB_KEY_BY_HASH_FRAG[frag.toLowerCase()] || null;
+    }
+
+    function applyMainTab(tab) {
+      const allowed = new Set(['converter', 'excel', 'merge-rows', 'merge-cols', 'editor']);
+      if (!allowed.has(tab)) tab = 'converter';
+      document.querySelectorAll('.tab-bar .tab-trigger').forEach(b => {
+        b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false');
+      });
+      document.getElementById('panel-converter').hidden = tab !== 'converter';
+      document.getElementById('panel-excel').hidden = tab !== 'excel';
+      document.getElementById('panel-merge-rows').hidden = tab !== 'merge-rows';
+      document.getElementById('panel-merge-columns').hidden = tab !== 'merge-cols';
+      document.getElementById('panel-editor').hidden = tab !== 'editor';
+      if (tab === 'excel') pageSubtitle.textContent = SUBTITLE_EXCEL;
+      else if (tab === 'merge-rows') pageSubtitle.textContent = SUBTITLE_MERGE_ROWS;
+      else if (tab === 'merge-cols') pageSubtitle.textContent = SUBTITLE_MERGE_COLS;
+      else if (tab === 'editor') pageSubtitle.textContent = SUBTITLE_EDITOR;
+      else pageSubtitle.textContent = SUBTITLE_CONVERTER;
+    }
+
+    function syncMainTabFromLocation() {
+      const raw = normalizeRawHashFragment(window.location.hash);
+      const mapped = raw ? fragToTabKey(raw) : null;
+      const tabKey = mapped || 'converter';
+      if (raw && !mapped) {
+        const u = new URL(window.location.href);
+        u.hash = TAB_HASH_FRAGMENT.converter;
+        history.replaceState(null, '', u.pathname + u.search + u.hash);
+      }
+      applyMainTab(tabKey);
+    }
+
     document.querySelectorAll('.tab-bar .tab-trigger').forEach(btn => {
       btn.addEventListener('click', () => {
         const tab = btn.dataset.tab;
-        document.querySelectorAll('.tab-bar .tab-trigger').forEach(b => {
-          b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
-        });
-        document.getElementById('panel-converter').hidden = tab !== 'converter';
-        document.getElementById('panel-excel').hidden = tab !== 'excel';
-        document.getElementById('panel-merge-rows').hidden = tab !== 'merge-rows';
-        document.getElementById('panel-merge-columns').hidden = tab !== 'merge-cols';
-        document.getElementById('panel-editor').hidden = tab !== 'editor';
-        if (tab === 'excel') pageSubtitle.textContent = SUBTITLE_EXCEL;
-        else if (tab === 'merge-rows') pageSubtitle.textContent = SUBTITLE_MERGE_ROWS;
-        else if (tab === 'merge-cols') pageSubtitle.textContent = SUBTITLE_MERGE_COLS;
-        else if (tab === 'editor') pageSubtitle.textContent = SUBTITLE_EDITOR;
-        else pageSubtitle.textContent = SUBTITLE_CONVERTER;
+        const frag = TAB_HASH_FRAGMENT[tab];
+        if (!frag) return;
+        if (window.location.hash === '#' + frag) {
+          applyMainTab(tab);
+          return;
+        }
+        window.location.hash = frag;
       });
     });
+
+    window.addEventListener('hashchange', syncMainTabFromLocation);
+    syncMainTabFromLocation();
 
     function renderDistinctTable(container, columnTitle, values, scanned, truncated, metaLine) {
       if (!values.length) {
