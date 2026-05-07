@@ -703,10 +703,11 @@
       <div id="llm-settings">
         <p class="hint">Endpoint and credentials are sent only with this request — not stored on the server. Use HTTPS if not on localhost. If the app runs in <strong>Docker</strong> and Ollama is on your computer, set base URL to <code>http://host.docker.internal:11434/v1</code> (not <code>127.0.0.1</code> — that points at the container).</p>
         <div class="llm-field-row">
-          <label>Base URL <input type="url" id="llm-base-url" placeholder="https://api.openai.com/v1 or http://host.docker.internal:11434/v1" autocomplete="off" /></label>
+          <label>Base URL <input type="text" id="llm-base-url" spellcheck="false" inputmode="url" autocomplete="off" autocapitalize="off" placeholder="https://api.openai.com/v1 or Azure/proxy URL — editable anytime" title="OpenAI-compatible API base (must end with /v1 for most providers)" /></label>
           <label>API key <input type="password" id="llm-api-key" placeholder="sk-… or ollama" autocomplete="off" /></label>
           <label>Model <select id="llm-model" aria-label="Model name"><option value="">— Click Fetch models —</option></select></label>
           <button type="button" class="btn btn--muted btn--sm" id="llm-fetch-models">Fetch models</button>
+          <button type="button" class="btn btn--muted btn--sm" id="llm-openai-preset" title="Fill OpenAI default base URL — you can still edit this field (e.g. Azure or proxy)">OpenAI · api.openai.com</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-docker-preset" title="Ollama on the host when Flask runs in Docker (Docker Desktop)">Ollama · Docker host</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-proxy-preset" title="Host gateway proxy (OpenAI-compatible /v1), often port forwarding to Ollama — same host as Docker host">Ollama · proxy :35700</button>
         </div>
@@ -1247,7 +1248,7 @@
       sel.value = modelId;
     }
 
-    document.getElementById('llm-fetch-models').addEventListener('click', async () => {
+    async function fetchLlmModels() {
       const btn = document.getElementById('llm-fetch-models');
       const base = document.getElementById('llm-base-url').value.trim();
       if (!base) {
@@ -1283,6 +1284,14 @@
       } finally {
         btn.disabled = false;
       }
+    }
+
+    document.getElementById('llm-openai-preset').addEventListener('click', async () => {
+      document.getElementById('llm-base-url').value = 'https://api.openai.com/v1';
+      await fetchLlmModels();
+    });
+    document.getElementById('llm-fetch-models').addEventListener('click', () => {
+      void fetchLlmModels();
     });
 
     function applyOllamaPreset(baseUrl) {
@@ -1890,7 +1899,7 @@
           );
         case 'llm_retry': {
           const na = payload.next_attempt != null ? esc(String(payload.next_attempt)) : '';
-          const ma = payload.max_attempts != null ? esc(String(payload.max_attempts)) : '3';
+          const ma = payload.max_attempts != null ? esc(String(payload.max_attempts)) : '6';
           const bs = payload.backoff_sec != null ? esc(String(payload.backoff_sec)) : '';
           const err = esc(payload.error || 'transient LLM error');
           const sec =

@@ -374,7 +374,7 @@ def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
 
 
 def _sleep_backoff(attempt: int) -> None:
-    # attempt=0 -> 10s, attempt=1 -> 20s (2 exponential backoffs total)
+    # attempt=0 -> 10s, 1 -> 20s, 2 -> 40s, … (between retries)
     time.sleep(10 * (2**attempt))
 
 
@@ -412,7 +412,7 @@ def _with_llm_retries(
     section_title: str | None = None,
 ) -> Any:
     last: Exception | None = None
-    max_attempts = 3  # initial + 2 retries
+    max_attempts = 6  # initial try + 5 retries
     for attempt in range(max_attempts):
         try:
             return fn()
@@ -944,8 +944,9 @@ def extract_with_llm(
     In section mode, a section with an empty body but a VZ_TC_* id in the title yields a placeholder Excel row
     (no LLM call); see extract_vz_tc_id in llm_document_filter.
 
-    Retries: transient server/network failures get 2 exponential backoffs (10s then 20s). When a progress
-    callback is provided, step \"llm_retry\" events include the error summary and next attempt countdown for the UI.
+    Retries: transient server/network failures get up to 5 retries with exponential backoff (10s, 20s, 40s, …).
+    When a progress callback is provided, step \"llm_retry\" events include the error summary and next attempt
+    countdown for the UI.
     """
     doc_text, prep_meta = prepare_text_for_llm(doc_text)
     if prep_meta.get("llm_prep_stripped"):
