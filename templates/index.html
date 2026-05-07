@@ -754,6 +754,11 @@
       </div>
     </div>
 
+    <p class="hint">
+      Keep this tab open while extraction runs so you can monitor progress and status.
+      Very large documents may fail because of LLM request timeouts; split the source into smaller files when you can, or use <strong>By section</strong> so each model call handles a smaller chunk.
+    </p>
+
     <div class="btn-row">
       <button type="button" class="btn btn--primary" id="extract-btn" disabled>Extract Test Cases</button>
       <button type="button" class="btn btn--danger" id="cancel-extract-btn" disabled>Cancel</button>
