@@ -496,16 +496,6 @@
       .join-lr-arrow { width: 100%; flex-direction: row; min-width: 0; padding: 8px 0; }
       .join-lr-arrow__glyph { transform: rotate(90deg); }
     }
-    #support-upload-panel {
-      margin-bottom: 18px;
-      padding: 14px 16px;
-      border-radius: var(--radius);
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      font-size: 0.9rem;
-    }
-    #support-upload-panel .hint { margin: 8px 0 0; color: var(--muted); font-size: 0.82rem; }
-
     #extract-mode-panel {
       margin-bottom: 18px;
       padding: 14px 16px;
@@ -762,15 +752,6 @@
         <p class="hint">The server may <strong>throttle LLM traffic</strong> via <code>LLM_RPM</code> in <code>.env</code> (default <strong>3 per 60s fixed window</strong>): you get up to 3 calls, then a pause until that minute-long window finishes and the limit <strong>fully resets</strong>. Local Ollama: often <code>LLM_RPM=0</code>.</p>
         <p id="llm-models-hint" class="hint" aria-live="polite"></p>
       </div>
-    </div>
-
-    <div id="support-upload-panel" aria-live="polite">
-      <strong>Need a new format?</strong>
-      Save the first selected file on the server for your developer, then contact them with the reference shown below.
-      <div class="btn-row" style="margin-top:12px;margin-bottom:8px;">
-        <button type="button" class="btn btn--secondary" id="support-upload-btn" disabled>Save for developer</button>
-      </div>
-      <p id="support-upload-msg" class="hint" hidden></p>
     </div>
 
     <div class="btn-row">
@@ -1164,15 +1145,8 @@
     const previewTitle   = document.getElementById('preview-title');
     const previewBody    = document.getElementById('preview-body');
     const docPreview     = document.getElementById('doc-preview');
-    const supportUploadBtn = document.getElementById('support-upload-btn');
-    const supportUploadMsg = document.getElementById('support-upload-msg');
     let selectedFiles = [];
     let extractedRows = [];
-
-    function syncSupportUploadBtn() {
-      supportUploadBtn.disabled = selectedFiles.length === 0;
-    }
-    syncSupportUploadBtn();
 
     const llmSettingsEl = document.getElementById('llm-settings');
     function syncLlmSectionPanels() {
@@ -1717,9 +1691,6 @@
       const hasFiles = selectedFiles.length > 0;
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
-      syncSupportUploadBtn();
-      supportUploadMsg.hidden = true;
-      supportUploadMsg.textContent = '';
       downloadBtn.classList.remove('is-shown');
       extractedRows = [];
       docPreview.style.display = 'none';
@@ -1737,10 +1708,7 @@
       const hasFiles = selectedFiles.length > 0;
       extractBtn.disabled = !hasFiles;
       previewBtn.disabled = !hasFiles;
-      syncSupportUploadBtn();
       if (!hasFiles) {
-        supportUploadMsg.hidden = true;
-        supportUploadMsg.textContent = '';
         downloadBtn.classList.remove('is-shown');
         docPreview.style.display = 'none';
         extractedRows = [];
@@ -2086,26 +2054,6 @@
         setStatus(`Error: ${esc(e.message)}`, 'error');
       } finally {
         samplePdfBtn.disabled = false; samplePdfBtn.textContent = 'Load PDF sample';
-      }
-    });
-
-    supportUploadBtn.addEventListener('click', async () => {
-      if (!selectedFiles.length) return;
-      supportUploadBtn.disabled = true;
-      supportUploadMsg.hidden = true;
-      try {
-        const form = new FormData();
-        form.append('file', selectedFiles[0]);
-        const r = await fetch('/support-upload', { method: 'POST', body: form });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || 'Upload failed');
-        supportUploadMsg.innerHTML =
-          `Saved. Please contact your developer and give them this reference: <strong>${esc(d.reference)}</strong>`;
-        supportUploadMsg.hidden = false;
-      } catch (e) {
-        setStatus(`Save for developer: ${esc(e.message)}`, 'error');
-      } finally {
-        syncSupportUploadBtn();
       }
     });
 
