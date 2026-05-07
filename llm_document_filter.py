@@ -80,6 +80,19 @@ def _raw_heading_is_appendix_section(title: str) -> bool:
     return False
 
 
+_TOC_LINE = re.compile(r'\S.*\.{4,}\s*\d+\s*$')
+
+
+def _strip_toc_lines(text: str) -> str:
+    lines = text.split("\n")
+    kept = []
+    for line in lines:
+        check = line.replace("|", " ") if "|" in line else line
+        if not _TOC_LINE.search(check):
+            kept.append(line)
+    return "\n".join(kept)
+
+
 _TEST_CASE_BODY_SIGNAL = re.compile(
     r"(?i)\b("
     r"expected\s+(?:results?|behaviors?|outcomes?)|"
@@ -196,6 +209,7 @@ def prepare_text_for_llm(raw: str) -> tuple[str, dict[str, Any]]:
     would leave nothing).
     """
     cleaned, detail = strip_boilerplate_heading_sections(raw)
+    cleaned = _strip_toc_lines(cleaned)
     meta: dict[str, Any] = {
         "llm_prep_chars_before": detail.get("chars_before", len(raw)),
         "llm_prep_chars_after": len(cleaned),
