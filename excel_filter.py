@@ -339,15 +339,17 @@ def _unique_from_right_column(base: str, taken: set[str]) -> str:
 def join_xlsx_to_bytes(
     target_path: str,
     source_path: str,
-    key_col: str,
+    target_key_col: str,
+    source_key_col: str,
     columns_to_copy: List[str],
     *,
     target_sheet_index: int = 0,
     source_sheet_index: int = 0,
     overlap: Literal["replace", "add"] = "replace",
 ) -> bytes:
-    """LEFT JOIN target with source on key_col; copy selected columns. First source match wins.
+    """LEFT JOIN target with source on key columns; copy selected columns. First source match wins.
 
+    target_key_col and source_key_col may differ; values are matched after normalization.
     When a copied column header already exists on the target, overlap=replace overwrites those
     cells from the right; overlap=add appends a new suffixed column such as 'Name (from right)'.
     """
@@ -361,9 +363,9 @@ def join_xlsx_to_bytes(
     src_ws = src_wb[src_names[source_sheet_index]]
     src_it = src_ws.iter_rows(values_only=True)
     src_headers = [normalize_cell(h) for h in next(src_it, [])]
-    if key_col not in src_headers:
-        raise ValueError(f"Key column '{key_col}' not found in source file.")
-    src_key_idx = src_headers.index(key_col)
+    if source_key_col not in src_headers:
+        raise ValueError(f"Right (source) key column '{source_key_col}' not found.")
+    src_key_idx = src_headers.index(source_key_col)
     lookup: Dict = {}
     for row in src_it:
         k = normalize_cell(row[src_key_idx])
@@ -381,8 +383,8 @@ def join_xlsx_to_bytes(
     tgt_ws = tgt_wb[tgt_names[target_sheet_index]]
     tgt_it = tgt_ws.iter_rows(values_only=True)
     tgt_headers = [normalize_cell(h) for h in next(tgt_it, [])]
-    if key_col not in tgt_headers:
-        raise ValueError(f"Key column '{key_col}' not found in target file.")
+    if target_key_col not in tgt_headers:
+        raise ValueError(f"Left (target) key column '{target_key_col}' not found.")
 
     if overlap not in ("replace", "add"):
         raise ValueError("overlap must be 'replace' or 'add'.")
@@ -409,7 +411,7 @@ def join_xlsx_to_bytes(
     all_rows = []
     for row in tgt_it:
         d = {tgt_headers[i]: normalize_cell(v) for i, v in enumerate(row)}
-        src_row = lookup.get(d.get(key_col, ""), {})
+        src_row = lookup.get(d.get(target_key_col, ""), {})
         for col in columns_to_copy:
             d[col_dest[col]] = src_row.get(col, "")
         all_rows.append(d)

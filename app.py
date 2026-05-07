@@ -1029,13 +1029,15 @@ def excel_join():
     """Enrich target xlsx with columns from source xlsx, matched on a key column (LEFT JOIN)."""
     target_f = request.files.get("target")
     source_f = request.files.get("source")
-    key_col = (request.form.get("key_col") or "").strip()
+    legacy_key = (request.form.get("key_col") or "").strip()
+    key_col_left = (request.form.get("key_col_left") or legacy_key or "").strip()
+    key_col_right = (request.form.get("key_col_right") or legacy_key or "").strip()
     columns_to_copy = request.form.getlist("columns")
 
     if not target_f or not source_f:
         return jsonify({"error": "Upload both a target and a source file."}), 400
-    if not key_col:
-        return jsonify({"error": "key_col is required."}), 400
+    if not key_col_left or not key_col_right:
+        return jsonify({"error": "key_col_left and key_col_right are required (or legacy key_col for both)."}), 400
     if not columns_to_copy:
         return jsonify({"error": "Select at least one column to copy."}), 400
     for f in (target_f, source_f):
@@ -1058,7 +1060,8 @@ def excel_join():
         data = join_xlsx_to_bytes(
             target_tmp,
             source_tmp,
-            key_col,
+            key_col_left,
+            key_col_right,
             columns_to_copy,
             target_sheet_index=target_sheet_index,
             source_sheet_index=source_sheet_index,

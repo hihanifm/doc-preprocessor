@@ -533,6 +533,57 @@
       .join-lr-arrow { width: 100%; flex-direction: row; min-width: 0; padding: 8px 0; }
       .join-lr-arrow__glyph { transform: rotate(90deg); }
     }
+    /* Align column pickers + Join with the Right pane (same flex bands as .join-lr-flow) */
+    .join-lr-tail {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 14px;
+      margin-top: 0.75rem;
+    }
+    .join-lr-tail__spacer--left {
+      flex: 1 1 220px;
+      min-height: 0;
+      pointer-events: none;
+    }
+    .join-lr-tail__arrow-gap {
+      flex: 0 0 auto;
+      min-width: 72px;
+    }
+    .join-lr-tail__right {
+      flex: 1 1 220px;
+    }
+    .join-lr-tail__actions {
+      margin-top: 0.75rem;
+    }
+    .join-lr-tail--split .join-lr-tail__left {
+      flex: 1 1 220px;
+    }
+    .join-lr-tail--split .join-lr-pane-field label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      margin: 0;
+      white-space: normal;
+    }
+    .join-lr-tail--split .join-lr-pane-field select {
+      min-width: 0;
+      width: 100%;
+    }
+    @media (max-width: 640px) {
+      .join-lr-tail__spacer--left,
+      .join-lr-tail__arrow-gap {
+        display: none;
+      }
+      .join-lr-tail__right {
+        flex: 1 1 100%;
+      }
+      .join-lr-tail--split .join-lr-tail__left,
+      .join-lr-tail--split .join-lr-tail__right {
+        flex: 1 1 100%;
+        max-width: 100%;
+      }
+    }
     #extract-mode-panel {
       margin-bottom: 18px;
       padding: 14px 16px;
@@ -977,16 +1028,31 @@
         </div>
 
         <div id="join-controls" style="display:none; margin-top:0.75rem;">
-          <div class="filter-row" style="align-items:center; gap:0.75rem; flex-wrap:wrap;">
-            <label for="join-target-sheet" class="hint" style="margin:0; white-space:nowrap;">Left sheet</label>
-            <select id="join-target-sheet" aria-label="Left worksheet"></select>
-            <label for="join-source-sheet" class="hint" style="margin:0; white-space:nowrap;">Right sheet</label>
-            <select id="join-source-sheet" aria-label="Right worksheet"></select>
+          <div class="join-lr-tail join-lr-tail--split">
+            <div class="join-lr-tail__left join-lr-pane-field">
+              <label for="join-target-sheet" class="hint" style="font-weight:650;">Left sheet</label>
+              <select id="join-target-sheet" aria-label="Left worksheet"></select>
+            </div>
+            <div class="join-lr-tail__arrow-gap" aria-hidden="true"></div>
+            <div class="join-lr-tail__right join-lr-pane-field">
+              <label for="join-source-sheet" class="hint" style="font-weight:650;">Right sheet</label>
+              <select id="join-source-sheet" aria-label="Right worksheet"></select>
+            </div>
           </div>
-          <div class="filter-row" style="align-items:center; gap:0.75rem; margin-top:0.75rem;">
-            <label for="join-key-col" class="hint" style="margin:0; white-space:nowrap;">Key column</label>
-            <select id="join-key-col" style="flex:1;" aria-label="Key column — must exist on left and right"></select>
+          <div class="join-lr-tail join-lr-tail--split" style="margin-top:0.75rem;">
+            <div class="join-lr-tail__left join-lr-pane-field">
+              <label for="join-key-col-left" class="hint" style="font-weight:650;">Key column (left)</label>
+              <select id="join-key-col-left" aria-label="Join key column on the left workbook"></select>
+            </div>
+            <div class="join-lr-tail__arrow-gap" aria-hidden="true"></div>
+            <div class="join-lr-tail__right join-lr-pane-field">
+              <label for="join-key-col-right" class="hint" style="font-weight:650;">Key column (right)</label>
+              <select id="join-key-col-right" aria-label="Join key column on the right workbook"></select>
+            </div>
           </div>
+          <p class="hint" style="margin:0.5rem 0 0;line-height:1.45;">
+            Keys can use <strong>different column names</strong> on left and right; rows match when normalized cell values are equal.
+          </p>
           <fieldset id="join-overlap-group" style="margin:0.75rem 0 0; padding:0; border:none;">
             <legend class="hint" style="padding:0; margin:0 0 0.4rem; font-weight:650;">When a selected right column already exists on the left</legend>
             <div class="filter-row" style="align-items:flex-start; gap:1rem; flex-wrap:wrap;">
@@ -1000,9 +1066,15 @@
               </label>
             </div>
           </fieldset>
-          <div id="join-col-list" style="margin-top:0.75rem;"></div>
-          <div style="margin-top:0.75rem;">
-            <button type="button" class="btn btn--primary" id="join-download-btn" disabled>Join &amp; Download</button>
+          <div class="join-lr-tail" role="group" aria-label="Columns from the right workbook">
+            <div class="join-lr-tail__spacer join-lr-tail__spacer--left" aria-hidden="true"></div>
+            <div class="join-lr-tail__arrow-gap" aria-hidden="true"></div>
+            <div class="join-lr-tail__right">
+              <div id="join-col-list"></div>
+              <div class="join-lr-tail__actions">
+                <button type="button" class="btn btn--primary" id="join-download-btn" disabled>Join &amp; Download</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2857,7 +2929,8 @@
       const controls     = document.getElementById('join-controls');
       const targetSheetSel = document.getElementById('join-target-sheet');
       const sourceSheetSel = document.getElementById('join-source-sheet');
-      const keySelect    = document.getElementById('join-key-col');
+      const keySelectLeft  = document.getElementById('join-key-col-left');
+      const keySelectRight = document.getElementById('join-key-col-right');
       const colList      = document.getElementById('join-col-list');
       const downloadBtn  = document.getElementById('join-download-btn');
       const errorBox     = document.getElementById('join-error');
@@ -2887,6 +2960,21 @@
         sel.value = String(pick);
       }
 
+      function fillKeyColOpts(sel, cols, prevVal) {
+        sel.innerHTML = cols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+        const pick = prevVal && cols.includes(prevVal) ? prevVal : (cols[0] || '');
+        if (pick) sel.value = pick;
+      }
+
+      function syncJoinColPickVisibility() {
+        const keyedRight = keySelectRight.value;
+        colList.querySelectorAll('.join-col-cb').forEach(cb => {
+          const lab = cb.closest('label');
+          if (lab) lab.style.display = cb.value === keyedRight ? 'none' : 'block';
+        });
+        updateBtn();
+      }
+
       async function refresh() {
         errorBox.style.display = 'none';
         if (!targetFile || !sourceFile) { controls.style.display = 'none'; return; }
@@ -2905,18 +2993,20 @@
 
           sourceCols = srcCols;
 
-          keySelect.innerHTML = tgtCols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+          const prevKL = keySelectLeft.value;
+          const prevKR = keySelectRight.value;
+          fillKeyColOpts(keySelectLeft, tgtCols, prevKL);
+          fillKeyColOpts(keySelectRight, srcCols, prevKR);
 
-          const keyed = keySelect.value;
           colList.innerHTML = '<p class="hint" style="margin:0 0 0.4rem;">Columns to copy from the <strong>right</strong>:</p>' +
-            srcCols.filter(c => c !== keyed).map(c =>
+            srcCols.map(c =>
               `<label style="display:block; margin:0.2rem 0;">
                 <input type="checkbox" class="join-col-cb" value="${esc(c)}"> ${esc(c)}
               </label>`
             ).join('');
 
           controls.style.display = '';
-          updateBtn();
+          syncJoinColPickVisibility();
         } catch (e) {
           errorBox.innerHTML = `<div class="error-item">${esc(e.message)}</div>`;
           errorBox.style.display = '';
@@ -2929,13 +3019,8 @@
         downloadBtn.disabled = !anyChecked;
       }
 
-      keySelect.addEventListener('change', () => {
-        const keyed = keySelect.value;
-        colList.querySelectorAll('.join-col-cb').forEach(cb => {
-          cb.closest('label').style.display = cb.value === keyed ? 'none' : 'block';
-        });
-        updateBtn();
-      });
+      keySelectLeft.addEventListener('change', updateBtn);
+      keySelectRight.addEventListener('change', syncJoinColPickVisibility);
       colList.addEventListener('change', updateBtn);
 
       targetSheetSel.addEventListener('change', () => { void refresh(); });
@@ -2952,7 +3037,8 @@
           const fd = new FormData();
           fd.append('target', targetFile);
           fd.append('source', sourceFile);
-          fd.append('key_col', keySelect.value);
+          fd.append('key_col_left', keySelectLeft.value);
+          fd.append('key_col_right', keySelectRight.value);
           fd.append('target_sheet_index', targetSheetSel.value);
           fd.append('source_sheet_index', sourceSheetSel.value);
           const overlapEl = document.querySelector('input[name="join-overlap"]:checked');
