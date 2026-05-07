@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import queue
 import re
 import subprocess
 import tempfile
@@ -404,6 +403,41 @@ def _extract_core(
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
+_JOBS: dict[str, dict] = {}
+
+
+def _job_create() -> str:
+    job_id = uuid.uuid4().hex[:12]
+    _JOBS[job_id] = {"events": [], "done": False, "cond": threading.Condition()}
+    return job_id
+
+
+def _job_append(job_id: str, event: dict, *, done: bool = False) -> None:
+    job = _JOBS[job_id]
+    line = json.dumps(event, ensure_ascii=False) + "\n"
+    with job["cond"]:
+        job["events"].append(line)
+        if done:
+            job["done"] = True
+        job["cond"].notify_all()
+
+
+def _job_iter(job_id: str):
+    job = _JOBS.get(job_id)
+    if job is None:
+        return
+    idx = 0
+    while True:
+        with job["cond"]:
+            job["cond"].wait_for(lambda: idx < len(job["events"]) or job["done"], timeout=30)
+            batch = job["events"][idx:]
+            done_now = job["done"]
+        for line in batch:
+            idx += 1
+            yield line.encode("utf-8")
+        if done_now and idx >= len(_JOBS[job_id]["events"]):
+            break
+
 
 def _git_commit() -> str:
     try:
@@ -609,21 +643,17 @@ def extract():
             llm_stream = False
         # empty / auto → None (server picks by scope: whole uses LLM_STREAM; sections use LLM_STREAM_SECTIONS)
 
-    raw_prog = (request.form.get("llm_progress_stream") or "1").strip().lower()
-    want_stream = mode == "llm" and raw_prog not in ("0", "false", "no", "off")
-
     work_list = _stage_uploaded_files(files)
     n_staged_ok = sum(1 for w in work_list if w.get("kind") == "ok")
     n_staged_bad = sum(1 for w in work_list if w.get("kind") == "bad")
     if mode == "llm":
         _bu = (llm_base_url or "")[:120]
         log.info(
-            "POST /extract staged ip=%s mode=llm staged_ok=%d staged_bad=%d ndjson=%s model=%r "
+            "POST /extract staged ip=%s mode=llm staged_ok=%d staged_bad=%d model=%r "
             "llm_base_url_prefix=%r scope=%s split=%s",
             _client_ip(),
             n_staged_ok,
             n_staged_bad,
-            want_stream,
             llm_model,
             _bu,
             llm_document_scope,
@@ -637,102 +667,51 @@ def extract():
             n_staged_bad,
         )
 
-    if want_stream:
-        q: queue.Queue[tuple[str, Any]] = queue.Queue()
-        holder: dict[str, Any] = {}
+    job_id = _job_create()
 
-        def worker():
-            try:
-                holder["payload"] = _extract_core(
-                    work_list,
-                    mode=mode,
-                    llm_base_url=llm_base_url,
-                    llm_api_key=llm_api_key,
-                    llm_model=llm_model,
-                    llm_document_scope=llm_document_scope,
-                    llm_heading_level=llm_heading_level,
-                    llm_section_split=llm_section_split,
-                    llm_section_regex_hints=llm_section_regex_hints,
-                    llm_user_hints=llm_user_hints,
-                    llm_stream=llm_stream,
-                    progress=lambda ev: q.put(("p", ev)),
-                )
-            except Exception as e:
-                log.exception("POST /extract ndjson worker failed ip=%s", _client_ip())
-                holder["err"] = e
-            finally:
-                q.put(("done", None))
-
-        th = threading.Thread(target=worker, daemon=True)
-        th.start()
-
-        def generate():
-            while True:
-                kind, payload = q.get()
-                if kind == "p":
-                    yield (
-                        json.dumps({"type": "progress", "data": payload}, ensure_ascii=False) + "\n"
-                    ).encode("utf-8")
-                elif kind == "done":
-                    break
-            th.join(timeout=720)
-            err = holder.get("err")
-            if err is not None:
-                yield (json.dumps({"type": "error", "message": str(err)}, ensure_ascii=False) + "\n").encode(
-                    "utf-8"
-                )
-                return
-            pl = holder.get("payload")
-            if pl is None:
-                log.warning("POST /extract ndjson no payload after worker ip=%s", _client_ip())
-                yield (
-                    json.dumps({"type": "error", "message": "No extraction result"}, ensure_ascii=False) + "\n"
-                ).encode("utf-8")
-                return
-            log.info(
-                "POST /extract ndjson done ip=%s rows=%d errors=%d file_results=%d",
-                _client_ip(),
-                len(pl.get("rows") or []),
-                len(pl.get("errors") or []),
-                len(pl.get("file_results") or []),
+    def _worker():
+        try:
+            payload = _extract_core(
+                work_list,
+                mode=mode,
+                llm_base_url=llm_base_url,
+                llm_api_key=llm_api_key,
+                llm_model=llm_model,
+                llm_document_scope=llm_document_scope,
+                llm_heading_level=llm_heading_level,
+                llm_section_split=llm_section_split,
+                llm_section_regex_hints=llm_section_regex_hints,
+                llm_user_hints=llm_user_hints,
+                llm_stream=llm_stream,
+                progress=lambda ev: _job_append(job_id, {"type": "progress", "data": ev}),
             )
-            yield (json.dumps({"type": "result", **pl}, ensure_ascii=False) + "\n").encode("utf-8")
+            log.info(
+                "POST /extract job=%s done ip=%s mode=%s rows=%d errors=%d file_results=%d",
+                job_id, _client_ip(), mode,
+                len(payload.get("rows") or []),
+                len(payload.get("errors") or []),
+                len(payload.get("file_results") or []),
+            )
+            _job_append(job_id, {"type": "result", **payload}, done=True)
+        except Exception as e:
+            log.exception("POST /extract job=%s worker failed ip=%s", job_id, _client_ip())
+            _job_append(job_id, {"type": "error", "message": str(e)}, done=True)
 
-        return Response(
-            stream_with_context(generate()),
-            mimetype="application/x-ndjson",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Extract-Stream": "1",
-                "X-Request-ID": req_id,
-            },
-        )
-
-    out = _extract_core(
-        work_list,
-        mode=mode,
-        llm_base_url=llm_base_url,
-        llm_api_key=llm_api_key,
-        llm_model=llm_model,
-        llm_document_scope=llm_document_scope,
-        llm_heading_level=llm_heading_level,
-        llm_section_split=llm_section_split,
-        llm_section_regex_hints=llm_section_regex_hints,
-        llm_user_hints=llm_user_hints,
-        llm_stream=llm_stream,
-        progress=None,
-    )
-    log.info(
-        "POST /extract done ip=%s mode=%s rows=%d errors=%d file_results=%d",
-        _client_ip(),
-        mode,
-        len(out.get("rows") or []),
-        len(out.get("errors") or []),
-        len(out.get("file_results") or []),
-    )
-    r = jsonify(out)
+    threading.Thread(target=_worker, daemon=True).start()
+    r = jsonify({"job_id": job_id})
     r.headers["X-Request-ID"] = req_id
     return r
+
+
+@app.route("/extract/<job_id>/stream", methods=["GET"])
+def extract_stream(job_id: str):
+    if job_id not in _JOBS:
+        return jsonify({"error": "job not found"}), 404
+    return Response(
+        stream_with_context(_job_iter(job_id)),
+        mimetype="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Extract-Stream": "1"},
+    )
 
 
 @app.route("/download", methods=["POST"])

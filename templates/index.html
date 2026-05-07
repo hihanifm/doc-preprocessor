@@ -564,7 +564,8 @@
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
-      <button type="button" class="tab-trigger" role="tab" id="tab-merge" aria-selected="false" aria-controls="panel-merge" data-tab="merge">Merge sheets</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-merge-rows" aria-selected="false" aria-controls="panel-merge-rows" data-tab="merge-rows">Row merger</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-merge-columns" aria-selected="false" aria-controls="panel-merge-columns" data-tab="merge-cols">Column merger</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-editor" aria-selected="false" aria-controls="panel-editor" data-tab="editor">Spreadsheet editor</button>
     </div>
 
@@ -750,9 +751,9 @@
       </div>
     </div>
 
-    <div id="panel-merge" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge" hidden>
+    <div id="panel-merge-rows" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge-rows" hidden>
       <div id="excel-merge">
-        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — they will be combined into a single sheet.</p>
+        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — all rows are stacked into one sheet.</p>
 
         <div id="merge-drop-zone" class="drop-zone">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
@@ -777,9 +778,9 @@
 
         <div id="merge-error" style="display:none; margin-top:0.75rem;"></div>
       </div>
+    </div>
 
-      <hr style="margin:1.5rem 0; border:none; border-top:1px solid #ddd;">
-
+    <div id="panel-merge-columns" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge-columns" hidden>
       <div id="excel-join">
         <p class="hint"><strong>Enrich with lookup (JOIN)</strong> — pick a target and a source file that share a common key column. Select which source columns to copy across.</p>
 
@@ -807,7 +808,6 @@
 
         <div id="join-error" style="display:none; margin-top:0.75rem;"></div>
       </div>
-    </div>
     </div>
 
     <div id="panel-editor" class="tab-panel" role="tabpanel" aria-labelledby="tab-editor" hidden>
@@ -872,8 +872,10 @@
       'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';
     const SUBTITLE_EXCEL =
       'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
-    const SUBTITLE_MERGE =
-      'Merge sheets: combine multiple .xlsx files with identical columns into one workbook.';
+    const SUBTITLE_MERGE_ROWS =
+      'Row merger: stack multiple workbooks that share the same columns — one tall sheet.';
+    const SUBTITLE_MERGE_COLS =
+      'Column merger: enrich a target sheet with columns from a source workbook matched on a key (lookup / JOIN).';
     const SUBTITLE_EDITOR =
       'Spreadsheet editor: open a workbook in your browser only — paginate, edit cells, mark rows to remove, download a new .xlsx.';
 
@@ -886,10 +888,12 @@
         });
         document.getElementById('panel-converter').hidden = tab !== 'converter';
         document.getElementById('panel-excel').hidden = tab !== 'excel';
-        document.getElementById('panel-merge').hidden = tab !== 'merge';
+        document.getElementById('panel-merge-rows').hidden = tab !== 'merge-rows';
+        document.getElementById('panel-merge-columns').hidden = tab !== 'merge-cols';
         document.getElementById('panel-editor').hidden = tab !== 'editor';
         if (tab === 'excel') pageSubtitle.textContent = SUBTITLE_EXCEL;
-        else if (tab === 'merge') pageSubtitle.textContent = SUBTITLE_MERGE;
+        else if (tab === 'merge-rows') pageSubtitle.textContent = SUBTITLE_MERGE_ROWS;
+        else if (tab === 'merge-cols') pageSubtitle.textContent = SUBTITLE_MERGE_COLS;
         else if (tab === 'editor') pageSubtitle.textContent = SUBTITLE_EDITOR;
         else pageSubtitle.textContent = SUBTITLE_CONVERTER;
       });
@@ -1497,6 +1501,7 @@
 
     /** NDJSON /extract progress (LLM): section titles, row counts, file index */
     let ndjsonProgressPayload = null;
+    const EXTRACT_JOB_KEY = 'extract_job_id';
     function buildLlmLiveProgressInner(payload) {
       if (!payload || !payload.step) return '';
       const fname = payload.file
@@ -1643,6 +1648,7 @@
           } else if (o.type === 'result') {
             last = o;
           } else if (o.type === 'error') {
+            localStorage.removeItem(EXTRACT_JOB_KEY);
             throw new Error(o.message || 'Extract failed');
           }
         }
@@ -1651,9 +1657,13 @@
       if (buf.trim()) {
         const o = JSON.parse(buf.trim());
         if (o.type === 'result') last = o;
-        else if (o.type === 'error') throw new Error(o.message || 'Extract failed');
+        else if (o.type === 'error') {
+          localStorage.removeItem(EXTRACT_JOB_KEY);
+          throw new Error(o.message || 'Extract failed');
+        }
       }
       if (!last || last.type !== 'result') throw new Error('Incomplete extraction stream');
+      localStorage.removeItem(EXTRACT_JOB_KEY);
       return {
         rows: last.rows,
         errors: last.errors || [],
@@ -1766,13 +1776,7 @@
       const startedAt = Date.now();
       document.getElementById('converter-outcome')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-      const useLlmNdjson = extractMode === 'llm';
-      if (useLlmNdjson) {
-        form.append('llm_progress_stream', '1');
-        startLlmNdjsonProgressTicker(selectedFiles.length, startedAt);
-      } else {
-        startExtractProgress(extractMode, selectedFiles.length, llmSectionScope, llmRegexSections);
-      }
+      startLlmNdjsonProgressTicker(selectedFiles.length, startedAt);
 
       form.append('mode', extractMode);
       if (extractMode === 'llm') {
@@ -1789,19 +1793,16 @@
       }
 
       try {
-        const resp = await fetchExtractWithRetry('/extract', { method: 'POST', body: form }, 10);
-        const streamHdr = resp.headers.get('X-Extract-Stream');
-        let data;
-        if (streamHdr === '1') {
-          if (!resp.ok) {
-            const errData = await resp.json().catch(() => ({}));
-            throw new Error(errData.error || 'Server error');
-          }
-          data = await readNdjsonExtract(resp, startedAt, selectedFiles.length);
-        } else {
-          data = await resp.json();
-          if (!resp.ok) throw new Error(data.error || 'Server error');
+        const postResp = await fetchExtractWithRetry('/extract', { method: 'POST', body: form }, 10);
+        if (!postResp.ok) {
+          const errData = await postResp.json().catch(() => ({}));
+          throw new Error(errData.error || 'Server error');
         }
+        const { job_id } = await postResp.json();
+        localStorage.setItem(EXTRACT_JOB_KEY, job_id);
+        const streamResp = await fetch(`/extract/${job_id}/stream`);
+        if (!streamResp.ok) throw new Error('Stream unavailable');
+        const data = await readNdjsonExtract(streamResp, startedAt, selectedFiles.length);
 
         extractedRows = data.rows || [];
         const errors = data.errors || [];
@@ -2403,6 +2404,31 @@
           downloadBtn.textContent = 'Enrich & Download';
         }
       });
+    })();
+
+    // Rejoin an in-progress extraction job after page refresh or navigation
+    (async function tryRejoinJob() {
+      const jobId = localStorage.getItem(EXTRACT_JOB_KEY);
+      if (!jobId) return;
+      const streamResp = await fetch(`/extract/${jobId}/stream`).catch(() => null);
+      if (!streamResp || !streamResp.ok) {
+        localStorage.removeItem(EXTRACT_JOB_KEY);
+        return;
+      }
+      const startedAt = Date.now();
+      startLlmNdjsonProgressTicker(1, startedAt);
+      try {
+        const data = await readNdjsonExtract(streamResp, startedAt, 1);
+        extractedRows = data.rows || [];
+        renderPreview(extractedRows);
+        downloadBtn.classList.add('is-shown');
+        setStatus(`<strong>${extractedRows.length}</strong> row(s) ready (reconnected).`, 'ok');
+      } catch (err) {
+        setStatus(`Reconnect error: ${esc(err.message)}`, 'error');
+        localStorage.removeItem(EXTRACT_JOB_KEY);
+      } finally {
+        stopExtractProgress();
+      }
     })();
   </script>
 </body>
