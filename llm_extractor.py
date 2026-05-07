@@ -311,6 +311,9 @@ def _post_stream_collect(url: str, headers: dict[str, str], payload: dict[str, A
         )
         hint = f" {err_body}" if err_body else ""
         raise LlmExtractError(f"LLM HTTP error {e.code}.{hint}".strip()) from None
+    except TimeoutError as e:
+        log.warning("LLM stream POST %s timed out: %s", url, e)
+        raise LlmExtractError("LLM request timed out") from None
     except URLError as e:
         log.warning("LLM stream POST %s unreachable: %s", url, e.reason)
         raise LlmExtractError(f"Could not reach LLM server: {e.reason!s}") from None
@@ -338,6 +341,9 @@ def _post_json(url: str, headers: dict[str, str], payload: dict[str, Any], timeo
     except URLError as e:
         log.warning("LLM POST %s unreachable: %s", url, e.reason)
         raise LlmExtractError(f"Could not reach LLM server: {e.reason!s}") from None
+    except TimeoutError as e:
+        log.warning("LLM POST %s timed out: %s", url, e)
+        raise LlmExtractError("LLM request timed out") from None
     except json.JSONDecodeError as e:
         log.warning("LLM POST %s returned invalid JSON: %s", url, e)
         raise LlmExtractError(f"Invalid JSON from LLM server: {e}") from None

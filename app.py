@@ -702,6 +702,8 @@ def extract():
     )
 
     job_id = _job_create()
+    # Worker runs outside Flask request context — capture IP once here for logs.
+    worker_client_ip = _client_ip()
 
     def _worker():
         try:
@@ -727,17 +729,17 @@ def extract():
             )
             log.info(
                 "POST /extract job=%s done ip=%s mode=%s rows=%d errors=%d file_results=%d",
-                job_id, _client_ip(), mode,
+                job_id, worker_client_ip, mode,
                 len(payload.get("rows") or []),
                 len(payload.get("errors") or []),
                 len(payload.get("file_results") or []),
             )
             _job_append(job_id, {"type": "result", **payload}, done=True)
         except _ExtractCancelled:
-            log.info("POST /extract job=%s cancelled ip=%s", job_id, _client_ip())
+            log.info("POST /extract job=%s cancelled ip=%s", job_id, worker_client_ip)
             _job_cancel(job_id, "Cancelled")
         except Exception as e:
-            log.exception("POST /extract job=%s worker failed ip=%s", job_id, _client_ip())
+            log.exception("POST /extract job=%s worker failed ip=%s", job_id, worker_client_ip)
             _job_append(job_id, {"type": "error", "message": str(e)}, done=True)
 
     threading.Thread(target=_worker, daemon=True).start()
