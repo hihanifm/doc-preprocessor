@@ -385,6 +385,80 @@
       font-variant-numeric: tabular-nums;
     }
     #excel-peek-out { margin-top: 0; }
+    .merge-columns-preview {
+      padding: 10px 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .merge-columns-preview strong { color: #334155; }
+    .join-lr-flow {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: stretch;
+      gap: 14px;
+      margin-top: 6px;
+    }
+    .join-lr-pane {
+      flex: 1 1 220px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      border: 1px solid #e2e8f0;
+      background: #fff;
+    }
+    .join-lr-pane--left {
+      border-left: 4px solid #1e40af;
+      background: linear-gradient(90deg, rgba(30, 64, 175, 0.07), rgba(255, 255, 255, 0));
+      box-shadow: 0 1px 5px rgba(30, 64, 175, 0.1);
+    }
+    .join-lr-pane--right {
+      border-left: 4px solid #94a3b8;
+      background: #fafbfc;
+    }
+    .join-lr-pane__title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: #1e293b;
+      margin: 0 0 2px;
+    }
+    .join-lr-pane__title--left { color: #1e40af; }
+    .join-lr-pane__micro {
+      font-size: 0.78rem;
+      color: #64748b;
+      margin: 0 0 10px;
+      line-height: 1.35;
+    }
+    .join-lr-pane label { display: flex; flex-direction: column; gap: 0.35rem; margin: 0; }
+    .join-lr-arrow {
+      flex: 0 0 auto;
+      min-width: 72px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      padding: 6px 4px;
+      color: #1e40af;
+      text-align: center;
+    }
+    .join-lr-arrow__type {
+      font-size: 0.65rem;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      line-height: 1.2;
+    }
+    .join-lr-arrow__glyph {
+      font-size: 1.5rem;
+      line-height: 1;
+      font-weight: 400;
+    }
+    @media (max-width: 640px) {
+      .join-lr-arrow { width: 100%; flex-direction: row; min-width: 0; padding: 8px 0; }
+      .join-lr-arrow__glyph { transform: rotate(90deg); }
+    }
     #support-upload-panel {
       margin-bottom: 18px;
       padding: 14px 16px;
@@ -767,6 +841,7 @@
         </div>
 
         <div id="merge-file-list" style="display:none;" class="hint" style="margin-top:0.5rem;"></div>
+        <div id="merge-columns-preview" style="display:none; margin-top:0.6rem;" class="hint merge-columns-preview" aria-live="polite"></div>
 
         <div class="filter-row" style="margin-top:0.75rem; align-items:center; gap:0.75rem; flex-wrap:wrap;">
           <label id="merge-sheet-wrap" style="display:none; align-items:center; gap:0.4rem; margin:0; flex-wrap:wrap;">
@@ -786,33 +861,45 @@
 
     <div id="panel-merge-columns" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge-columns" hidden>
       <div id="excel-join">
-        <p class="hint"><strong>Enrich with lookup (JOIN)</strong> — pick a target and a source file that share a common key column. Select which source columns to copy across.</p>
+        <p class="hint"><strong>LEFT JOIN</strong> — the <strong>left</strong> workbook defines every output row; the <strong>right</strong> workbook supplies extra columns wherever the keys match.</p>
 
-        <div class="filter-row" style="gap:0.75rem; flex-wrap:wrap;">
-          <label style="display:flex; flex-direction:column; gap:0.25rem; flex:1; min-width:180px;">
-            <span class="hint" style="margin:0;">Target file</span>
-            <input type="file" id="join-target-file" accept=".xlsx,.xlsm" />
-          </label>
-          <label style="display:flex; flex-direction:column; gap:0.25rem; flex:1; min-width:180px;">
-            <span class="hint" style="margin:0;">Source file</span>
-            <input type="file" id="join-source-file" accept=".xlsx,.xlsm" />
-          </label>
+        <div class="join-lr-flow">
+          <div class="join-lr-pane join-lr-pane--left">
+            <p class="join-lr-pane__title join-lr-pane__title--left">Left</p>
+            <p class="join-lr-pane__micro">Keeps every row — this sheet is your result’s backbone.</p>
+            <label>
+              <span class="hint" style="margin:0;">Left file</span>
+              <input type="file" id="join-target-file" accept=".xlsx,.xlsm" aria-label="Left workbook — join base" />
+            </label>
+          </div>
+          <div class="join-lr-arrow" title="Classic SQL LEFT JOIN: all left rows retained; matching right rows add columns">
+            <span class="join-lr-arrow__type">LEFT<br/>JOIN</span>
+            <span class="join-lr-arrow__glyph" aria-hidden="true">&#x27F6;</span>
+          </div>
+          <div class="join-lr-pane join-lr-pane--right">
+            <p class="join-lr-pane__title">Right</p>
+            <p class="join-lr-pane__micro">Lookup — columns are merged in only where the key lines up.</p>
+            <label>
+              <span class="hint" style="margin:0;">Right file</span>
+              <input type="file" id="join-source-file" accept=".xlsx,.xlsm" aria-label="Right workbook — lookup" />
+            </label>
+          </div>
         </div>
 
         <div id="join-controls" style="display:none; margin-top:0.75rem;">
           <div class="filter-row" style="align-items:center; gap:0.75rem; flex-wrap:wrap;">
-            <label for="join-target-sheet" class="hint" style="margin:0; white-space:nowrap;">Target sheet</label>
-            <select id="join-target-sheet" aria-label="Target worksheet"></select>
-            <label for="join-source-sheet" class="hint" style="margin:0; white-space:nowrap;">Source sheet</label>
-            <select id="join-source-sheet" aria-label="Source worksheet"></select>
+            <label for="join-target-sheet" class="hint" style="margin:0; white-space:nowrap;">Left sheet</label>
+            <select id="join-target-sheet" aria-label="Left worksheet"></select>
+            <label for="join-source-sheet" class="hint" style="margin:0; white-space:nowrap;">Right sheet</label>
+            <select id="join-source-sheet" aria-label="Right worksheet"></select>
           </div>
           <div class="filter-row" style="align-items:center; gap:0.75rem; margin-top:0.75rem;">
             <label for="join-key-col" class="hint" style="margin:0; white-space:nowrap;">Key column</label>
-            <select id="join-key-col" style="flex:1;"></select>
+            <select id="join-key-col" style="flex:1;" aria-label="Key column — must exist on left and right"></select>
           </div>
           <div id="join-col-list" style="margin-top:0.75rem;"></div>
           <div style="margin-top:0.75rem;">
-            <button type="button" class="btn btn--primary" id="join-download-btn" disabled>Enrich &amp; Download</button>
+            <button type="button" class="btn btn--primary" id="join-download-btn" disabled>Join &amp; Download</button>
           </div>
         </div>
 
@@ -885,7 +972,7 @@
     const SUBTITLE_MERGE_ROWS =
       'Row merger: stack multiple workbooks that share the same columns — one tall sheet.';
     const SUBTITLE_MERGE_COLS =
-      'Column merger: enrich a target sheet with columns from a source workbook matched on a key (lookup / JOIN).';
+      'Column merger: LEFT JOIN — every row from the left workbook stays; add columns from the right where keys match.';
     const SUBTITLE_EDITOR =
       'Spreadsheet editor: open a workbook in your browser only — paginate, edit cells, mark rows to remove, download a new .xlsx.';
 
@@ -2264,11 +2351,53 @@
       const mergeSheet = document.getElementById('merge-sheet');
       const mergeBtn  = document.getElementById('merge-download-btn');
       const errorBox  = document.getElementById('merge-error');
+      const colsPreview = document.getElementById('merge-columns-preview');
 
       let pickedFiles = null;
 
+      function clearMergeColumnPreview() {
+        colsPreview.style.display = 'none';
+        colsPreview.innerHTML = '';
+      }
+
+      async function refreshMergeColumnPreview() {
+        clearMergeColumnPreview();
+        if (!pickedFiles || pickedFiles.length < 2 || !mergeSheet.options.length) return;
+        const idx = mergeSheet.value;
+        try {
+          const parts = await Promise.all(
+            Array.from(pickedFiles).map(async f => {
+              const fd = new FormData();
+              fd.append('file', f);
+              fd.append('sheet_index', idx);
+              const res = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
+              const d = await res.json();
+              if (d.error) return { name: f.name, err: d.error };
+              return { name: f.name, cols: d.columns };
+            })
+          );
+          let html =
+            '<strong>Columns</strong> on the selected sheet (order matters for merge)<br>';
+          html += parts
+            .map(p => {
+              if (p.err) {
+                return `<div style="margin-top:0.38rem;"><strong>${esc(p.name)}</strong> — <span style="color:#b45309;">${esc(p.err)}</span></div>`;
+              }
+              const list = (p.cols || []).map(c => esc(String(c))).join(', ');
+              return `<div style="margin-top:0.38rem;"><strong>${esc(p.name)}</strong> (${(p.cols || []).length}): ${list || '(none)'}</div>`;
+            })
+            .join('');
+          colsPreview.innerHTML = html;
+          colsPreview.style.display = '';
+        } catch (e) {
+          colsPreview.innerHTML = `<div style="color:#b45309;">${esc(e.message)}</div>`;
+          colsPreview.style.display = '';
+        }
+      }
+
       async function refreshMergeSheetList() {
         errorBox.style.display = 'none';
+        clearMergeColumnPreview();
         mergeSheetWrap.style.display = 'none';
         mergeSheet.innerHTML = '';
         mergeBtn.disabled = true;
@@ -2290,11 +2419,14 @@
           });
           mergeSheetWrap.style.display = 'inline-flex';
           mergeBtn.disabled = false;
+          void refreshMergeColumnPreview();
         } catch (e) {
           errorBox.innerHTML = `<div class="error-item">${esc(e.message)}</div>`;
           errorBox.style.display = '';
         }
       }
+
+      mergeSheet.addEventListener('change', () => { void refreshMergeColumnPreview(); });
 
       function setFiles(files) {
         pickedFiles = files && files.length ? files : null;
@@ -2353,7 +2485,7 @@
       });
     })();
 
-    // ── Enrich with lookup (JOIN) ─────────────────────────────────────────────
+    // ── Column merger (LEFT JOIN) ─────────────────────────────────────────────
     (() => {
       const targetInput  = document.getElementById('join-target-file');
       const sourceInput  = document.getElementById('join-source-file');
@@ -2411,7 +2543,7 @@
           keySelect.innerHTML = tgtCols.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
 
           const keyed = keySelect.value;
-          colList.innerHTML = '<p class="hint" style="margin:0 0 0.4rem;">Source columns to copy:</p>' +
+          colList.innerHTML = '<p class="hint" style="margin:0 0 0.4rem;">Columns to copy from the <strong>right</strong>:</p>' +
             srcCols.filter(c => c !== keyed).map(c =>
               `<label style="display:block; margin:0.2rem 0;">
                 <input type="checkbox" class="join-col-cb" value="${esc(c)}"> ${esc(c)}
@@ -2450,7 +2582,7 @@
       downloadBtn.addEventListener('click', async () => {
         errorBox.style.display = 'none';
         downloadBtn.disabled = true;
-        downloadBtn.textContent = 'Enriching…';
+        downloadBtn.textContent = 'Joining…';
         try {
           const fd = new FormData();
           fd.append('target', targetFile);
@@ -2478,7 +2610,7 @@
           errorBox.style.display = '';
         } finally {
           downloadBtn.disabled = false;
-          downloadBtn.textContent = 'Enrich & Download';
+          downloadBtn.textContent = 'Join & Download';
         }
       });
     })();
