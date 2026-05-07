@@ -358,19 +358,17 @@ def output_path_for(
 
 
 def build_extract_form(args: argparse.Namespace) -> dict[str, str]:
-    mode = args.mode.strip().lower()
-    form: dict[str, str] = {"mode": mode}
-    if mode == "llm":
-        form["llm_base_url"] = args.llm_base_url
-        form["llm_api_key"] = args.llm_api_key
-        form["llm_model"] = args.llm_model
-        form["llm_document_scope"] = args.llm_document_scope
-        form["llm_heading_level"] = args.llm_heading_level
-        form["llm_section_split"] = args.llm_section_split
-        form["llm_section_regex_hints"] = args.llm_section_regex_hints
-        form["llm_user_hints"] = args.llm_user_hints
-        if args.llm_stream is not None:
-            form["llm_stream"] = args.llm_stream
+    form: dict[str, str] = {"mode": "llm"}
+    form["llm_base_url"] = args.llm_base_url
+    form["llm_api_key"] = args.llm_api_key
+    form["llm_model"] = args.llm_model
+    form["llm_document_scope"] = args.llm_document_scope
+    form["llm_heading_level"] = args.llm_heading_level
+    form["llm_section_split"] = args.llm_section_split
+    form["llm_section_regex_hints"] = args.llm_section_regex_hints
+    form["llm_user_hints"] = args.llm_user_hints
+    if args.llm_stream is not None:
+        form["llm_stream"] = args.llm_stream
     return form
 
 
@@ -392,8 +390,6 @@ def parse_env_defaults() -> dict[str, str]:
     out: dict[str, str] = {}
     if os.environ.get("DOCS_GARAGE_URL"):
         out["base_url"] = os.environ["DOCS_GARAGE_URL"].strip()
-    if os.environ.get("DOCS_GARAGE_MODE"):
-        out["mode"] = os.environ["DOCS_GARAGE_MODE"].strip().lower()
     return out
 
 
@@ -435,7 +431,7 @@ def _default_merged_dict(env: dict[str, str]) -> dict[str, Any]:
         "source": None,
         "output": None,
         "base_url": env.get("base_url", "http://127.0.0.1:35050"),
-        "mode": env.get("mode", "template"),
+        "mode": "llm",
         "recursive": False,
         "disambiguate_ext": False,
         "timeout": 720.0,
@@ -483,8 +479,8 @@ def _coerce_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
         out["output"] = Path(out["output"])
     if out.get("log_file") is not None:
         out["log_file"] = Path(out["log_file"])
-    if "mode" in out and out["mode"] not in ("template", "llm"):
-        raise ValueError("mode must be template or llm")
+    if "mode" in out and out["mode"] != "llm":
+        raise ValueError("mode must be llm")
     if "llm_document_scope" in out and out["llm_document_scope"] not in ("whole", "sections"):
         raise ValueError("llm_document_scope must be whole or sections")
     if "llm_section_split" in out and out["llm_section_split"] not in ("headings", "patterns"):
@@ -621,9 +617,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--mode",
-        choices=("template", "llm"),
+        choices=("llm",),
         default=argparse.SUPPRESS,
-        help="Extraction mode (env: DOCS_GARAGE_MODE). Default template.",
+        help="Extraction mode. Only 'llm' is supported.",
     )
     parser.add_argument("--recursive", action="store_true", default=argparse.SUPPRESS, help="Include .docx/.pdf in subfolders.")
     parser.add_argument(

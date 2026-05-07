@@ -10,7 +10,7 @@ python scripts/folder_batch_extract.py \
   --source /path/to/indir \
   --output /path/to/outdir \
   --base-url http://127.0.0.1:35050 \
-  --mode template
+  --mode llm
 ```
 
 ### JSON config (`--config`)
@@ -42,12 +42,6 @@ Example file: [`scripts/batch_config.example.json`](batch_config.example.json) â
 
 - Same behavior as the web UI: if **one section** fails in LLM section mode, the server **still returns rows from successful sections** and adds messages to **`errors`**. You can still get a workbook whenever **`rows`** is non-empty.
 
-### Template mode
-
-```bash
-python scripts/folder_batch_extract.py --source ./in --output ./out --mode template
-```
-
 ### LLM mode
 
 Required: `--llm-base-url`, `--llm-model`, and usually `--llm-api-key` (`ollama` for local Ollama).
@@ -77,7 +71,7 @@ If `--llm-section-split patterns`, provide **`--llm-section-regex-hints`** (inli
 | Env | Maps to |
 |-----|---------|
 | `DOCS_GARAGE_URL` | `--base-url` |
-| `DOCS_GARAGE_MODE` | `--mode` (`template` or `llm`) |
+| `DOCS_GARAGE_MODE` | `--mode` (`llm`) |
 
 CLI flags override env.
 

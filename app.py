@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 class _ExtractCancelled(Exception):
     pass
 
+def _app_version() -> str:
+    try:
+        root = os.path.dirname(os.path.abspath(__file__))
+        p = os.path.join(root, "VERSION")
+        return (open(p, "r", encoding="utf-8").read().strip() or "unknown")[:64]
+    except Exception:
+        return "unknown"
+
 
 class _ExtractRequestLogAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
@@ -483,12 +491,11 @@ def _git_commit() -> str:
 
 @app.route("/health")
 def health():
-    exts = [e.name for e in extractor_registry.get_extractors()]
     return jsonify({
         "status": "ok",
+        "version": _app_version(),
         "commit": _git_commit(),
-        "extractors": exts,
-        "extractor_count": len(exts),
+        "template_extractors_enabled": False,
         "support_upload_enabled": True,
     })
 
@@ -500,7 +507,7 @@ def index():
 
 @app.route("/extractors")
 def list_extractors():
-    return jsonify({"extractors": [e.name for e in extractor_registry.get_extractors()]})
+    return jsonify({"extractors": [], "template_extractors_enabled": False})
 
 
 @app.route("/preview-doc", methods=["POST"])
@@ -621,7 +628,9 @@ def extract():
         r.headers["X-Request-ID"] = req_id
         return r, 400
 
-    mode = (request.form.get("mode") or "template").strip().lower()
+    mode = (request.form.get("mode") or "llm").strip().lower()
+    if mode != "llm":
+        return _extract_reject("Template extractors are disabled. Use mode=llm.", req_id=req_id)
     upload_names = [(f.filename or "")[:200] for f in files]
     log.info(
         "POST /extract ip=%s mode=%s n_file_parts=%d upload_names=%s",
@@ -679,26 +688,18 @@ def extract():
     work_list = _stage_uploaded_files(files)
     n_staged_ok = sum(1 for w in work_list if w.get("kind") == "ok")
     n_staged_bad = sum(1 for w in work_list if w.get("kind") == "bad")
-    if mode == "llm":
-        _bu = (llm_base_url or "")[:120]
-        log.info(
-            "POST /extract staged ip=%s mode=llm staged_ok=%d staged_bad=%d model=%r "
-            "llm_base_url_prefix=%r scope=%s split=%s",
-            _client_ip(),
-            n_staged_ok,
-            n_staged_bad,
-            llm_model,
-            _bu,
-            llm_document_scope,
-            llm_section_split,
-        )
-    else:
-        log.info(
-            "POST /extract staged ip=%s mode=template staged_ok=%d staged_bad=%d",
-            _client_ip(),
-            n_staged_ok,
-            n_staged_bad,
-        )
+    _bu = (llm_base_url or "")[:120]
+    log.info(
+        "POST /extract staged ip=%s mode=llm staged_ok=%d staged_bad=%d model=%r "
+        "llm_base_url_prefix=%r scope=%s split=%s",
+        _client_ip(),
+        n_staged_ok,
+        n_staged_bad,
+        llm_model,
+        _bu,
+        llm_document_scope,
+        llm_section_split,
+    )
 
     job_id = _job_create()
 

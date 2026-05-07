@@ -187,7 +187,7 @@
       border-radius: 7px; padding: 10px 14px; font-size: 0.82rem; margin: 4px 0;
     }
 
-    /* Extract — per-file template matching */
+    /* Extract — per-file results */
     .extract-summary {
       display: none;
       margin-bottom: 0;
@@ -698,8 +698,7 @@
     <div id="extract-mode-panel">
       <div class="mode-row">
         <span style="font-weight:650;color:#475569;">Extraction:</span>
-        <label class="mode-opt"><input type="radio" name="extract-mode" value="template" checked /> Template extractors</label>
-        <label class="mode-opt"><input type="radio" name="extract-mode" value="llm" /> LLM (OpenAI-compatible)</label>
+        <span class="hint" style="margin:0;">LLM (OpenAI-compatible)</span>
       </div>
       <div id="llm-settings">
         <p class="hint">Endpoint and credentials are sent only with this request — not stored on the server. Use HTTPS if not on localhost. If the app runs in <strong>Docker</strong> and Ollama is on your computer, set base URL to <code>http://host.docker.internal:11434/v1</code> (not <code>127.0.0.1</code> — that points at the container).</p>
@@ -708,7 +707,6 @@
           <label>API key <input type="password" id="llm-api-key" placeholder="sk-… or ollama" autocomplete="off" /></label>
           <label>Model <select id="llm-model" aria-label="Model name"><option value="">— Click Fetch models —</option></select></label>
           <button type="button" class="btn btn--muted btn--sm" id="llm-fetch-models">Fetch models</button>
-          <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-preset" title="Ollama on the same machine as the browser (Flask not in Docker)">Ollama · localhost</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-docker-preset" title="Ollama on the host when Flask runs in Docker (Docker Desktop)">Ollama · Docker host</button>
           <button type="button" class="btn btn--muted btn--sm" id="llm-ollama-proxy-preset" title="Host gateway proxy (OpenAI-compatible /v1), often port forwarding to Ollama — same host as Docker host">Ollama · proxy :35700</button>
         </div>
@@ -1197,13 +1195,9 @@
       }
     }
     function syncExtractModeUi() {
-      const llm = document.querySelector('input[name="extract-mode"]:checked').value === 'llm';
-      llmSettingsEl.classList.toggle('visible', llm);
-      if (llm) syncLlmSectionPanels();
+      llmSettingsEl.classList.add('visible');
+      syncLlmSectionPanels();
     }
-    document.querySelectorAll('input[name="extract-mode"]').forEach(r => {
-      r.addEventListener('change', syncExtractModeUi);
-    });
     syncExtractModeUi();
     const llmDocScopeEl = document.getElementById('llm-document-scope');
     if (llmDocScopeEl) llmDocScopeEl.addEventListener('change', syncLlmSectionPanels);
@@ -1292,16 +1286,12 @@
     });
 
     function applyOllamaPreset(baseUrl) {
-      document.querySelector('input[name="extract-mode"][value="llm"]').checked = true;
       syncExtractModeUi();
       document.getElementById('llm-base-url').value = baseUrl;
       document.getElementById('llm-api-key').value = 'ollama';
       ensureLlmModelOption('llama3.2');
       setLlmModelsHint('');
     }
-    document.getElementById('llm-ollama-preset').addEventListener('click', () => {
-      applyOllamaPreset('http://127.0.0.1:11434/v1');
-    });
     document.getElementById('llm-ollama-docker-preset').addEventListener('click', () => {
       applyOllamaPreset('http://host.docker.internal:11434/v1');
     });
@@ -1361,9 +1351,6 @@
             rpmHint = `<span class="extract-summary-row--trunc" style="color:#57534e;">LLM rate limit: ${esc(String(fr.llm_rpm))} request(s)/min (server).</span>`;
           }
           return `<div class="extract-summary-row extract-summary-row--ok"><strong>${esc(fr.filename)}</strong> — <strong>${esc(fr.template)}</strong> · ${rowPhrase} extracted.${zeroHint}${secHint}${truncHint}${prepHint}${rpmHint}</div>`;
-        }
-        if (fr.reason === 'no_template') {
-          return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — <strong>No template matched.</strong> Ask your developer to add an extractor under <code>extractors/</code> (see <code>samples/</code> for examples). You can also use <strong>Save for developer</strong> above to store this file on the server.</div>`;
         }
         if (fr.reason === 'unsupported') {
           return `<div class="extract-summary-row extract-summary-row--bad"><strong>${esc(fr.filename)}</strong> — only <code>.docx</code> and digital <code>.pdf</code> files work on this tab.</div>`;
@@ -1799,7 +1786,7 @@
       } else {
         if (elapsedMs < 1500) phase = 'Uploading files…';
         else if (elapsedMs < 3500) phase = 'Parsing Word/PDF text…';
-        else if (elapsedMs < 7000) phase = 'Matching extractor templates…';
+        else if (elapsedMs < 7000) phase = 'Preparing extraction…';
         else phase = 'Building rows…';
       }
       const meta = `${nf} · ${elapsed} elapsed`;
@@ -2132,10 +2119,8 @@
       clearStatus();
       const form = new FormData();
       selectedFiles.forEach(f => form.append('files', f));
-      const extractMode = document.querySelector('input[name="extract-mode"]:checked').value;
-      const llmSectionScope =
-        extractMode === 'llm' &&
-        document.getElementById('llm-document-scope').value === 'sections';
+      const extractMode = 'llm';
+      const llmSectionScope = document.getElementById('llm-document-scope').value === 'sections';
       const llmRegexSections =
         llmSectionScope && document.getElementById('llm-section-split').value === 'patterns';
       const startedAt = Date.now();
@@ -2146,18 +2131,16 @@
       activeExtractJobId = null;
 
       form.append('mode', extractMode);
-      if (extractMode === 'llm') {
-        form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
-        form.append('llm_api_key', document.getElementById('llm-api-key').value);
-        form.append('llm_model', document.getElementById('llm-model').value.trim());
-        form.append('llm_document_scope', document.getElementById('llm-document-scope').value);
-        form.append('llm_heading_level', document.getElementById('llm-heading-level').value);
-        form.append('llm_section_split', document.getElementById('llm-section-split').value);
-        form.append('llm_section_regex_hints', document.getElementById('llm-section-regex-hints').value);
-        form.append('llm_user_hints', document.getElementById('llm-user-hints').value.trim());
-        const streamMode = document.getElementById('llm-stream-mode').value;
-        if (streamMode !== 'auto') form.append('llm_stream', streamMode);
-      }
+      form.append('llm_base_url', document.getElementById('llm-base-url').value.trim());
+      form.append('llm_api_key', document.getElementById('llm-api-key').value);
+      form.append('llm_model', document.getElementById('llm-model').value.trim());
+      form.append('llm_document_scope', document.getElementById('llm-document-scope').value);
+      form.append('llm_heading_level', document.getElementById('llm-heading-level').value);
+      form.append('llm_section_split', document.getElementById('llm-section-split').value);
+      form.append('llm_section_regex_hints', document.getElementById('llm-section-regex-hints').value);
+      form.append('llm_user_hints', document.getElementById('llm-user-hints').value.trim());
+      const streamMode = document.getElementById('llm-stream-mode').value;
+      if (streamMode !== 'auto') form.append('llm_stream', streamMode);
 
       try {
         const postResp = await fetchExtractWithRetry(
@@ -2196,28 +2179,18 @@
 
         const anyOk = fileResults.some(r => r.ok);
         const anyRows = extractedRows.length > 0;
-        const allNoTemplate = fileResults.length > 0 && fileResults.every(r => !r.ok && r.reason === 'no_template');
-
         if (!anyRows) {
-          if (extractMode === 'llm') {
-            if (errors.length) {
-              setStatus('LLM extraction failed or returned nothing usable. See the breakdown below.', 'error');
-            } else {
-              setStatus('LLM returned <strong>zero</strong> test cases. Try another model or check document content.', 'warning');
-            }
-          } else if (allNoTemplate) {
-            setStatus('No extractor template matched your file(s). Check the breakdown below and contact your developer for a new template. Use <strong>Save for developer</strong> if you want the file stored for them.', 'error');
+          if (errors.length) {
+            setStatus('LLM extraction failed or returned nothing usable. See the breakdown below.', 'error');
           } else if (anyOk) {
-            setStatus('A template matched, but <strong>zero</strong> test case rows came back. Try another document or ask your developer to adjust the extractor.', 'warning');
+            setStatus('LLM returned <strong>zero</strong> test cases. Try another model or check document content.', 'warning');
           } else if (errors.length) {
             setStatus('Nothing was extracted. See the breakdown below.', 'error');
           } else {
             setStatus('No test cases found.', 'error');
           }
         } else {
-          const tplNote = data.template
-            ? ` Extractor template(s): <strong>${esc(data.template)}</strong>.`
-            : '';
+          const tplNote = data.template ? ` Model: <strong>${esc(data.template)}</strong>.` : '';
           const okFiles = fileResults.filter(r => r.ok).length;
           const truncParts = extractMode === 'llm'
             ? fileResults.filter(r => r.ok && r.llm_truncated).map(r => {

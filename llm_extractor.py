@@ -367,78 +367,42 @@ def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
     return _default_stream_enabled()
 
 
-_LLM_RPM_WINDOW_SEC = 60.0
+def _sleep_backoff(attempt: int) -> None:
+    # attempt=0 -> 1s, attempt=1 -> 2s (2 exponential backoffs total)
+    time.sleep(2**attempt)
 
 
-def _env_llm_rpm() -> int:
-    """
-    Max chat/completions calls per fixed-length window (process-wide): burst up to this many,
-    then sleep until the window ends and the counter fully resets (not a sliding window).
-    LLM_RPM (preferred); falls back to legacy LLM_MAX_CALLS. Default 3.
-    Zero or negative = no limit.
-    """
-    raw = (os.environ.get("LLM_RPM") or os.environ.get("LLM_MAX_CALLS") or "3").strip()
-    try:
-        return int(raw)
-    except ValueError:
-        return 3
+def _is_retryable_llm_server_error(err: Exception) -> bool:
+    s = str(err)
+    # We only retry "server-ish" failures. This is intentionally conservative: user input
+    # problems (400s) should fail fast; server/network flakiness gets two tries.
+    return any(
+        tok in s
+        for tok in (
+            "HTTP error 500",
+            "HTTP error 502",
+            "HTTP error 503",
+            "HTTP error 504",
+            "timed out",
+            "Temporary failure",
+            "Could not reach LLM server",
+        )
+    )
 
 
-class LlmChatRateLimiter:
-    """Fixed window: up to max_calls per window_sec; when full, wait until window ends then reset to 0."""
-
-    __slots__ = ("max_calls", "window_sec", "_lock", "_period_start", "_count")
-
-    def __init__(self, max_calls: int, window_sec: float) -> None:
-        self.max_calls = max_calls
-        self.window_sec = window_sec
-        self._lock = threading.Lock()
-        self._period_start: float | None = None
-        self._count = 0
-
-    def acquire(self) -> None:
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                if self._period_start is None:
-                    self._period_start = now
-                    self._count = 0
-                if now - self._period_start >= self.window_sec:
-                    self._period_start = now
-                    self._count = 0
-                if self._count < self.max_calls:
-                    self._count += 1
-                    return
-                wait = self._period_start + self.window_sec - now
-            w = max(min(wait, 300.0), 0.05)
-            log.info(
-                "LLM_RPM throttle: window full (%d calls / %ds); pausing %.1fs until period resets "
-                "(then next %d calls allowed immediately — LLM_RPM=0 disables)",
-                self.max_calls,
-                int(self.window_sec),
-                w,
-                self.max_calls,
-            )
-            time.sleep(w)
-
-
-_llm_rpm_limiter: LlmChatRateLimiter | None = None
-_llm_rpm_limiter_for_rpm: int | None = None
-_llm_rpm_limiter_global_lock = threading.Lock()
-
-
-def _rate_limit_llm_chat() -> None:
-    """Wait if needed so chat/completions calls stay under LLM_RPM per fixed minute-sized window (global)."""
-    rpm = _env_llm_rpm()
-    if rpm <= 0:
-        return
-    global _llm_rpm_limiter, _llm_rpm_limiter_for_rpm
-    with _llm_rpm_limiter_global_lock:
-        if _llm_rpm_limiter is None or _llm_rpm_limiter_for_rpm != rpm:
-            _llm_rpm_limiter = LlmChatRateLimiter(rpm, _LLM_RPM_WINDOW_SEC)
-            _llm_rpm_limiter_for_rpm = rpm
-        lim = _llm_rpm_limiter
-    lim.acquire()
+def _with_llm_retries(fn: Callable[[], Any]) -> Any:
+    last: Exception | None = None
+    for attempt in range(3):  # initial + 2 retries
+        try:
+            return fn()
+        except LlmExtractError as e:
+            last = e
+            if attempt >= 2 or not _is_retryable_llm_server_error(e):
+                raise
+            log.warning("LLM server error (attempt %d/3): %s; backing off", attempt + 1, e)
+            _sleep_backoff(attempt)
+    assert last is not None
+    raise last
 
 
 def detect_shallowest_heading_level(text: str) -> int | None:
@@ -614,7 +578,6 @@ def _extract_with_llm_single_pass(
     )
 
     try:
-        _rate_limit_llm_chat()
         if progress and section_title is None:
             progress(
                 {
@@ -624,36 +587,41 @@ def _extract_with_llm_single_pass(
                 }
             )
 
-        content = ""
+        def _do_call() -> str:
+            content = ""
 
-        if use_stream:
-            log.debug("LLM extract using streaming (SSE)")
-            try:
-                content = _post_stream_collect(url, headers, payload_json, timeout)
-            except LlmExtractError as first:
-                if "HTTP error 400" not in str(first):
-                    raise
-                log.info("LLM stream with json_object rejected HTTP 400; retry stream without response_format")
-                content = _post_stream_collect(url, headers, payload, timeout)
+            if use_stream:
+                log.debug("LLM extract using streaming (SSE)")
+                try:
+                    content = _post_stream_collect(url, headers, payload_json, timeout)
+                except LlmExtractError as first:
+                    if "HTTP error 400" not in str(first):
+                        raise
+                    log.info("LLM stream with json_object rejected HTTP 400; retry stream without response_format")
+                    content = _post_stream_collect(url, headers, payload, timeout)
+
+                if not content.strip():
+                    log.warning("LLM streaming returned empty assistant text; falling back to non-streaming completion")
 
             if not content.strip():
-                log.warning("LLM streaming returned empty assistant text; falling back to non-streaming completion")
+                try:
+                    data = _post_json(url, headers, payload_json, timeout)
+                except LlmExtractError as first:
+                    if "HTTP error 400" not in str(first):
+                        raise
+                    data = _post_json(url, headers, payload, timeout)
+                choices = data.get("choices") or []
+                if not choices:
+                    raise LlmExtractError("LLM returned no choices.")
+                try:
+                    msg0 = choices[0].get("message")
+                    content = (msg0.get("content") or "") if isinstance(msg0, dict) else ""
+                except (TypeError, KeyError, IndexError) as e:
+                    raise LlmExtractError(f"Unexpected LLM response shape: {e}") from None
 
-        if not content.strip():
-            try:
-                data = _post_json(url, headers, payload_json, timeout)
-            except LlmExtractError as first:
-                if "HTTP error 400" not in str(first):
-                    raise
-                data = _post_json(url, headers, payload, timeout)
-            choices = data.get("choices") or []
-            if not choices:
-                raise LlmExtractError("LLM returned no choices.")
-            try:
-                msg0 = choices[0].get("message")
-                content = (msg0.get("content") or "") if isinstance(msg0, dict) else ""
-            except (TypeError, KeyError, IndexError) as e:
-                raise LlmExtractError(f"Unexpected LLM response shape: {e}") from None
+            return content
+
+        content = _with_llm_retries(_do_call)
 
         if not content.strip():
             raise LlmExtractError("LLM returned empty content.")
@@ -926,7 +894,7 @@ def extract_with_llm(
     In section mode, a section with an empty body but a VZ_TC_* id in the title yields a placeholder Excel row
     (no LLM call); see extract_vz_tc_id in llm_document_filter.
 
-    Chat calls are throttled process-wide: LLM_RPM (default 3) per fixed 60s window (full reset after each wait) — see _rate_limit_llm_chat.
+    Retries: transient server/network failures get 2 exponential backoffs.
     """
     doc_text, prep_meta = prepare_text_for_llm(doc_text)
     if prep_meta.get("llm_prep_stripped"):
@@ -939,7 +907,7 @@ def extract_with_llm(
     uh = (user_hints or "").strip()
     ds = (document_scope or "sections").strip().lower()
     use_stream = _resolve_stream(document_scope, stream)
-    prep_meta["llm_rpm"] = _env_llm_rpm()
+    # LLM throttling removed: no server-side rate limiting here.
 
     if ds == "sections":
         rows, meta = extract_with_llm_by_sections(
