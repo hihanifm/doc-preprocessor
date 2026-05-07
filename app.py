@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -246,7 +247,11 @@ def _extract_core(
             )
 
         try:
+            _size_kb = os.path.getsize(tmp_path) // 1024
+            logger.info("reading %s (%d KB)", display_name, _size_kb)
+            _t0 = time.monotonic()
             doc_text = read_document(tmp_path)
+            logger.info("read done %s elapsed=%.1fs chars=%d", display_name, time.monotonic() - _t0, len(doc_text))
             if not doc_text.strip():
                 errors.append(
                     f"{display_name}: No extractable text in this PDF (common for scanned "
@@ -368,6 +373,7 @@ def _extract_core(
                 }
             )
         except Exception as e:
+            logger.exception("extraction failed: %s", display_name)
             errors.append(f"{display_name}: {e}")
             file_results.append(
                 {
@@ -443,7 +449,11 @@ def preview_doc():
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             f.save(tmp.name)
             tmp_path = tmp.name
+        _size_kb = os.path.getsize(tmp_path) // 1024
+        logger.info("reading %s (%d KB)", f.filename, _size_kb)
+        _t0 = time.monotonic()
         doc_text = read_document(tmp_path)
+        logger.info("read done %s elapsed=%.1fs chars=%d", f.filename, time.monotonic() - _t0, len(doc_text))
         return jsonify({"document_text": doc_text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
