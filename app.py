@@ -140,7 +140,8 @@ def _safe_support_save_parts(original: str | None) -> tuple[str, str] | None:
     return stem_clean, ext
 
 
-FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with"})
+FILTER_MODES = frozenset({"contains", "equals", "not_contains", "starts_with", "regex"})
+MAX_EXCEL_FILTER_RULES = 12
 
 _MAX_LLM_USER_HINT_CHARS = 8000
 
@@ -840,24 +841,64 @@ def excel_peek_column():
 
 @app.route("/excel/download-filtered", methods=["POST"])
 def excel_download_filtered():
-    """Shrink a spreadsheet by one column filter into a new workbook."""
+    """Shrink a spreadsheet using one column filter or multiple AND filters (filters_json)."""
     f = request.files.get("file")
-    column = (request.form.get("column") or "").strip()
-    mode = (request.form.get("mode") or "contains").strip().lower()
-    needle = request.form.get("value") or ""
+    raw_filters_json = (request.form.get("filters_json") or "").strip()
     if not f or not f.filename.lower().endswith((".xlsx", ".xlsm")):
         return jsonify({"error": "Upload a .xlsx or .xlsm file"}), 400
-    if not column:
-        return jsonify({"error": "column is required"}), 400
-    if mode not in FILTER_MODES:
-        return jsonify({"error": f"mode must be one of: {', '.join(sorted(FILTER_MODES))}"}), 400
+
+    rules: list[tuple[str, str, str]]
+    if raw_filters_json:
+        try:
+            data = json.loads(raw_filters_json)
+        except json.JSONDecodeError:
+            return jsonify({"error": "filters_json must be valid JSON."}), 400
+        if not isinstance(data, list):
+            return jsonify({"error": "filters_json must be a JSON array."}), 400
+        if len(data) > MAX_EXCEL_FILTER_RULES:
+            return jsonify(
+                {"error": f"At most {MAX_EXCEL_FILTER_RULES} filters allowed."}
+            ), 400
+        parsed: list[tuple[str, str, str]] = []
+        for i, item in enumerate(data):
+            if not isinstance(item, dict):
+                return jsonify({"error": f"Filter {i + 1} must be an object."}), 400
+            column_i = (item.get("column") or "").strip()
+            if not column_i:
+                return jsonify({"error": f"Filter {i + 1} needs a column."}), 400
+            mode_i = (item.get("mode") or "contains").strip().lower()
+            if mode_i not in FILTER_MODES:
+                return jsonify(
+                    {
+                        "error": f"Filter {i + 1}: mode must be one of "
+                        f"{', '.join(sorted(FILTER_MODES))}"
+                    }
+                ), 400
+            val = item.get("value")
+            needle_i = "" if val is None else str(val)
+            parsed.append((column_i, mode_i, needle_i))
+        if not parsed:
+            return jsonify({"error": "Provide at least one filter in filters_json."}), 400
+        rules = parsed
+    else:
+        column = (request.form.get("column") or "").strip()
+        mode = (request.form.get("mode") or "contains").strip().lower()
+        needle = request.form.get("value") or ""
+        if not column:
+            return jsonify({"error": "column is required"}), 400
+        if mode not in FILTER_MODES:
+            return jsonify(
+                {"error": f"mode must be one of: {', '.join(sorted(FILTER_MODES))}"}
+            ), 400
+        rules = [(column, mode, needle)]
+
     tmp_path = None
     try:
         sheet_index = int(request.form.get("sheet_index", 0))
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             f.save(tmp.name)
             tmp_path = tmp.name
-        xlsx_bytes = filter_xlsx_to_bytes(tmp_path, column, mode, needle, sheet_index)
+        xlsx_bytes = filter_xlsx_to_bytes(tmp_path, rules, sheet_index)
         base = os.path.splitext(f.filename)[0] or "filtered"
         out_name = f"{base}_filtered.xlsx"
         return Response(
@@ -875,12 +916,31 @@ def excel_download_filtered():
 
 @app.route("/excel/merge", methods=["POST"])
 def excel_merge():
-    """Merge multiple .xlsx/.xlsm files (same sheet index in each workbook) into one workbook."""
+    """Merge multiple .xlsx/.xlsm files into one workbook (per-file sheet via sheet_indices_json)."""
     files = request.files.getlist("files")
     if len(files) < 2:
         return jsonify({"error": "Upload at least 2 files to merge."}), 400
     add_source = request.form.get("add_source") == "1"
-    sheet_index = int(request.form.get("sheet_index", 0))
+    raw_si = (request.form.get("sheet_indices_json") or "").strip()
+    sheet_indices: list[int] | None = None
+    if raw_si:
+        try:
+            arr = json.loads(raw_si)
+        except json.JSONDecodeError:
+            return jsonify({"error": "sheet_indices_json must be valid JSON."}), 400
+        if not isinstance(arr, list):
+            return jsonify({"error": "sheet_indices_json must be a JSON array."}), 400
+        if len(arr) != len(files):
+            return jsonify(
+                {
+                    "error": f"sheet_indices_json must have {len(files)} integers (one per file)."
+                }
+            ), 400
+        try:
+            sheet_indices = [int(x) for x in arr]
+        except (TypeError, ValueError):
+            return jsonify({"error": "sheet_indices_json must contain integers only."}), 400
+    sheet_index_legacy = int(request.form.get("sheet_index", 0))
     tmp_paths: list[str] = []
     filenames: list[str] = []
     try:
@@ -893,7 +953,11 @@ def excel_merge():
                 tmp_paths.append(tmp.name)
             filenames.append(f.filename)
         data = merge_xlsx_to_bytes(
-            tmp_paths, filenames, add_source=add_source, sheet_index=sheet_index
+            tmp_paths,
+            filenames,
+            add_source=add_source,
+            sheet_indices=sheet_indices,
+            sheet_index=sheet_index_legacy,
         )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

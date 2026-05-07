@@ -385,6 +385,38 @@
       font-variant-numeric: tabular-nums;
     }
     #excel-peek-out { margin-top: 0; }
+    .excel-filter-rows { width: 100%; margin: 6px 0 4px; }
+    .excel-filter-row.filter-row {
+      margin-bottom: 8px;
+      align-items: center;
+    }
+    .excel-filter-row select {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+    }
+    .excel-filter-row .excel-filter-needle {
+      flex: 1 1 120px;
+      min-width: 100px;
+      max-width: 300px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+    }
+    .excel-filter-remove {
+      font-weight: 700;
+      min-width: 2.25rem;
+      padding-left: 10px !important;
+      padding-right: 10px !important;
+    }
+    #merge-sheet-per-file .merge-file-sheet-select {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+    }
     .merge-columns-preview {
       padding: 10px 12px;
       background: #f8fafc;
@@ -782,7 +814,7 @@
     <div id="panel-excel" class="tab-panel" role="tabpanel" aria-labelledby="tab-excel" hidden>
       <div id="excel-shrink">
         <p class="hint">
-          Large sheets: only column names and row counts load when you analyze — no heavy lists until you click preview or peek.
+          Large sheets: only column names and row counts load when you analyze — no heavy lists until you click preview or peek. Stack several column filters — every filter must pass (AND).
         </p>
 
         <div id="excel-drop-zone" class="drop-zone">
@@ -805,21 +837,32 @@
           <span id="excel-row-count" class="hint" style="margin:0;"></span>
         </div>
         <div id="excel-rows-preview"></div>
-        <div class="filter-row">
+        <div class="filter-row" style="align-items:center;">
           <select id="excel-sheet" style="display:none;" aria-label="Sheet"></select>
-          <select id="excel-column" aria-label="Column"></select>
-          <select id="excel-mode">
-            <option value="contains">Contains</option>
-            <option value="equals">Equals</option>
-            <option value="starts_with">Starts with</option>
-            <option value="not_contains">Does not contain</option>
-          </select>
-          <input type="text" id="excel-needle" placeholder="Filter text (optional = match all)" autocomplete="off" />
+        </div>
+        <div id="excel-filter-rows" class="excel-filter-rows">
+          <div class="excel-filter-row filter-row">
+            <select class="excel-filter-column" aria-label="Filter column"></select>
+            <select class="excel-filter-mode" aria-label="Filter mode">
+              <option value="contains">Contains</option>
+              <option value="equals">Equals</option>
+              <option value="starts_with">Starts with</option>
+              <option value="not_contains">Does not contain</option>
+              <option value="regex">Regex (Python re)</option>
+            </select>
+            <input type="text" class="excel-filter-needle" placeholder="Filter text (optional = match all)" autocomplete="off" />
+            <button type="button" class="btn btn--muted excel-filter-remove" disabled aria-label="Remove filter">−</button>
+          </div>
+        </div>
+        <div class="filter-row" style="align-items:center;">
+          <button type="button" class="btn btn--muted btn--sm" id="excel-add-filter" disabled>Add filter</button>
+          <span class="hint" style="margin:0;">All filters combine with <strong>AND</strong>; empty criteria in a row still matches that column.</span>
+          <span style="flex:1; min-width:6px;"></span>
           <button type="button" class="btn btn--primary" id="excel-download-btn" disabled>Download filtered sheet</button>
         </div>
         <div class="filter-row">
           <button type="button" class="btn btn--muted" id="excel-peek-btn" disabled>Peek distinct values (table)</button>
-          <span class="hint" style="margin:0;">On demand · server cap 30 values / 20k rows scanned</span>
+          <span class="hint" style="margin:0;">On demand · columns from first filter row · server cap 30 values / 20k rows scanned</span>
         </div>
         <div id="excel-peek-out" class="peek-panel"></div>
       </div>
@@ -827,7 +870,7 @@
 
     <div id="panel-merge-rows" class="tab-panel" role="tabpanel" aria-labelledby="tab-merge-rows" hidden>
       <div id="excel-merge">
-        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — all rows are stacked into one sheet. The same workbook <strong>sheet position</strong> (first, second, …) is used for every file.</p>
+        <p class="hint">Upload two or more <strong>.xlsx</strong> or <strong>.xlsm</strong> files with identical columns — all rows are stacked into one sheet. Choose which <strong>sheet</strong> to use from <em>each</em> workbook (they may differ).</p>
 
         <div id="merge-drop-zone" class="drop-zone">
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
@@ -841,13 +884,10 @@
         </div>
 
         <div id="merge-file-list" style="display:none;" class="hint" style="margin-top:0.5rem;"></div>
+        <div id="merge-sheet-per-file" style="display:none; margin-top:0.65rem;"></div>
         <div id="merge-columns-preview" style="display:none; margin-top:0.6rem;" class="hint merge-columns-preview" aria-live="polite"></div>
 
         <div class="filter-row" style="margin-top:0.75rem; align-items:center; gap:0.75rem; flex-wrap:wrap;">
-          <label id="merge-sheet-wrap" style="display:none; align-items:center; gap:0.4rem; margin:0; flex-wrap:wrap;">
-            <span class="hint" style="margin:0; white-space:nowrap;">Sheet</span>
-            <select id="merge-sheet" aria-label="Sheet position to merge from each workbook"></select>
-          </label>
           <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
             <input type="checkbox" id="merge-add-source" />
             Add "Source file" column
@@ -1260,9 +1300,8 @@
     const excelDownloadBtn = document.getElementById('excel-download-btn');
     const excelPeekBtn = document.getElementById('excel-peek-btn');
     const excelSheet = document.getElementById('excel-sheet');
-    const excelColumn = document.getElementById('excel-column');
-    const excelMode = document.getElementById('excel-mode');
-    const excelNeedle = document.getElementById('excel-needle');
+    const excelFilterRowsHost = document.getElementById('excel-filter-rows');
+    const excelAddFilterBtn = document.getElementById('excel-add-filter');
     const excelMeta = document.getElementById('excel-meta');
     const excelRowCount = document.getElementById('excel-row-count');
     const excelPeekOut = document.getElementById('excel-peek-out');
@@ -1270,6 +1309,110 @@
     const excelRowsPreview = document.getElementById('excel-rows-preview');
     const excelFileDisplay = document.getElementById('excel-file-display');
     let excelFile = null;
+    let excelShrinkerColumns = [];
+
+    function syncExcelFilterRowPlaceholder(row) {
+      const modeSel = row.querySelector('.excel-filter-mode');
+      const needle = row.querySelector('.excel-filter-needle');
+      if (!modeSel || !needle) return;
+      needle.placeholder =
+        modeSel.value === 'regex'
+          ? 'Regex pattern · Python re (optional = match all)'
+          : 'Filter text (optional = match all)';
+    }
+
+    function refillExcelColumnSelect(sel) {
+      const v = sel.value;
+      sel.innerHTML = '';
+      excelShrinkerColumns.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        sel.appendChild(opt);
+      });
+      if (excelShrinkerColumns.includes(v)) sel.value = v;
+      else if (excelShrinkerColumns.length) sel.value = excelShrinkerColumns[0];
+    }
+
+    function refreshAllExcelFilterColumnSelects() {
+      excelFilterRowsHost.querySelectorAll('.excel-filter-column').forEach(refillExcelColumnSelect);
+    }
+
+    function syncAllExcelFilterRowPlaceholders() {
+      excelFilterRowsHost.querySelectorAll('.excel-filter-row').forEach(syncExcelFilterRowPlaceholder);
+    }
+
+    function peekColumnFromExcelFilters() {
+      const sel = excelFilterRowsHost.querySelector('.excel-filter-column');
+      return sel ? (sel.value || '') : '';
+    }
+
+    function buildExcelFiltersPayload() {
+      const out = [];
+      excelFilterRowsHost.querySelectorAll('.excel-filter-row').forEach(row => {
+        const col = (row.querySelector('.excel-filter-column') || {}).value || '';
+        const mode = (row.querySelector('.excel-filter-mode') || {}).value || 'contains';
+        const val = row.querySelector('.excel-filter-needle')
+          ? row.querySelector('.excel-filter-needle').value
+          : '';
+        out.push({ column: col, mode, value: val });
+      });
+      return out;
+    }
+
+    function pruneExcelFiltersToOne() {
+      const rows = excelFilterRowsHost.querySelectorAll('.excel-filter-row');
+      rows.forEach((r, i) => { if (i > 0) r.remove(); });
+      const one = excelFilterRowsHost.querySelector('.excel-filter-row');
+      if (one) {
+        const n = one.querySelector('.excel-filter-needle');
+        if (n) n.value = '';
+        const c = one.querySelector('.excel-filter-column');
+        if (c) c.innerHTML = '';
+      }
+      updateExcelFilterRemoveDisabled();
+    }
+
+    function updateExcelFilterRemoveDisabled() {
+      const rows = excelFilterRowsHost.querySelectorAll('.excel-filter-row');
+      const only = rows.length <= 1;
+      rows.forEach(r => {
+        const b = r.querySelector('.excel-filter-remove');
+        if (b) b.disabled = only;
+      });
+    }
+
+    excelFilterRowsHost.addEventListener('change', e => {
+      if (e.target.classList.contains('excel-filter-mode')) {
+        syncExcelFilterRowPlaceholder(e.target.closest('.excel-filter-row'));
+      }
+    });
+
+    excelFilterRowsHost.addEventListener('click', e => {
+      if (e.target.classList.contains('excel-filter-remove')) {
+        const rows = excelFilterRowsHost.querySelectorAll('.excel-filter-row');
+        if (rows.length <= 1) return;
+        e.target.closest('.excel-filter-row').remove();
+        updateExcelFilterRemoveDisabled();
+      }
+    });
+
+    excelAddFilterBtn.addEventListener('click', () => {
+      if (!excelShrinkerColumns.length) return;
+      const first = excelFilterRowsHost.querySelector('.excel-filter-row');
+      const nu = first.cloneNode(true);
+      nu.querySelector('.excel-filter-column').innerHTML = '';
+      nu.querySelector('.excel-filter-mode').value = 'contains';
+      nu.querySelector('.excel-filter-needle').value = '';
+      refillExcelColumnSelect(nu.querySelector('.excel-filter-column'));
+      const rm = nu.querySelector('.excel-filter-remove');
+      if (rm) rm.disabled = false;
+      excelFilterRowsHost.appendChild(nu);
+      syncExcelFilterRowPlaceholder(nu);
+      updateExcelFilterRemoveDisabled();
+    });
+
+    updateExcelFilterRemoveDisabled();
 
     function excelChosenSheetIndex() {
       return excelSheet.options.length ? excelSheet.value : '0';
@@ -1334,19 +1477,17 @@
       excelSheet.style.display = 'inline-block';
       excelSheet.value = String(sheetIndex);
 
-      excelColumn.innerHTML = '';
-      d.columns.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c;
-        opt.textContent = c;
-        excelColumn.appendChild(opt);
-      });
+      excelShrinkerColumns = d.columns.slice();
+      refreshAllExcelFilterColumnSelects();
+      syncAllExcelFilterRowPlaceholders();
+      updateExcelFilterRemoveDisabled();
 
       excelMeta.style.display = 'block';
       excelRowCount.textContent = `${d.row_count.toLocaleString()} data rows · ${d.columns.length} columns`;
       excelDownloadBtn.disabled = d.columns.length === 0;
       excelPeekBtn.disabled = d.columns.length === 0;
       excelPreviewRowsBtn.disabled = d.columns.length === 0;
+      excelAddFilterBtn.disabled = d.columns.length === 0;
       excelPeekOut.classList.remove('visible');
       excelPeekOut.innerHTML = '';
       excelRowsPreview.classList.remove('visible');
@@ -1360,6 +1501,9 @@
       excelDownloadBtn.disabled = true;
       excelPeekBtn.disabled = true;
       excelPreviewRowsBtn.disabled = true;
+      excelAddFilterBtn.disabled = true;
+      excelShrinkerColumns = [];
+      pruneExcelFiltersToOne();
       excelMeta.style.display = 'none';
       excelSheet.style.display = 'none';
       excelPeekOut.classList.remove('visible');
@@ -1414,12 +1558,13 @@
     });
 
     excelPeekBtn.addEventListener('click', async () => {
-      if (!excelFile || !excelColumn.value) return;
+      const peekCol = peekColumnFromExcelFilters();
+      if (!excelFile || !peekCol) return;
       excelPeekBtn.disabled = true;
       try {
         const fd = new FormData();
         fd.append('file', excelFile);
-        fd.append('column', excelColumn.value);
+        fd.append('column', peekCol);
         fd.append('sheet_index', excelChosenSheetIndex());
         const r = await fetch('/excel/peek-column', { method: 'POST', body: fd });
         const d = await r.json();
@@ -1427,7 +1572,7 @@
         const meta =
           `${d.values.length} distinct · scanned ${d.scanned_rows} row(s)` +
           (d.truncated ? ' · truncated' : '');
-        renderDistinctTable(excelPeekOut, excelColumn.value, d.values, d.scanned_rows, d.truncated, meta);
+        renderDistinctTable(excelPeekOut, peekCol, d.values, d.scanned_rows, d.truncated, meta);
       } catch (err) {
         setStatus(`Peek: ${esc(err.message)}`, 'error');
       } finally {
@@ -1436,14 +1581,17 @@
     });
 
     excelDownloadBtn.addEventListener('click', async () => {
-      if (!excelFile || !excelColumn.value) return;
+      if (!excelFile || !excelShrinkerColumns.length) return;
+      const filters = buildExcelFiltersPayload();
+      if (!filters.length || filters.some(f => !(f.column || '').trim())) {
+        setStatus('Analyze the sheet, then choose a column for every filter row.', 'error');
+        return;
+      }
       excelDownloadBtn.disabled = true;
       try {
         const fd = new FormData();
         fd.append('file', excelFile);
-        fd.append('column', excelColumn.value);
-        fd.append('mode', excelMode.value);
-        fd.append('value', excelNeedle.value);
+        fd.append('filters_json', JSON.stringify(filters));
         fd.append('sheet_index', excelChosenSheetIndex());
         const resp = await fetch('/excel/download-filtered', { method: 'POST', body: fd });
         const ct = resp.headers.get('Content-Type') || '';
@@ -2347,8 +2495,7 @@
       const fileInput = document.getElementById('merge-file');
       const fileList  = document.getElementById('merge-file-list');
       const addSource = document.getElementById('merge-add-source');
-      const mergeSheetWrap = document.getElementById('merge-sheet-wrap');
-      const mergeSheet = document.getElementById('merge-sheet');
+      const mergeSheetHost = document.getElementById('merge-sheet-per-file');
       const mergeBtn  = document.getElementById('merge-download-btn');
       const errorBox  = document.getElementById('merge-error');
       const colsPreview = document.getElementById('merge-columns-preview');
@@ -2362,11 +2509,13 @@
 
       async function refreshMergeColumnPreview() {
         clearMergeColumnPreview();
-        if (!pickedFiles || pickedFiles.length < 2 || !mergeSheet.options.length) return;
-        const idx = mergeSheet.value;
+        if (!pickedFiles || pickedFiles.length < 2) return;
+        const selects = mergeSheetHost.querySelectorAll('.merge-file-sheet-select');
+        if (selects.length !== pickedFiles.length) return;
         try {
           const parts = await Promise.all(
-            Array.from(pickedFiles).map(async f => {
+            Array.from(pickedFiles).map(async (f, i) => {
+              const idx = selects[i].value;
               const fd = new FormData();
               fd.append('file', f);
               fd.append('sheet_index', idx);
@@ -2377,7 +2526,7 @@
             })
           );
           let html =
-            '<strong>Columns</strong> on the selected sheet (order matters for merge)<br>';
+            '<strong>Columns</strong> on each file’s chosen sheet (order matters for merge)<br>';
           html += parts
             .map(p => {
               if (p.err) {
@@ -2395,29 +2544,68 @@
         }
       }
 
-      async function refreshMergeSheetList() {
+      async function rebuildMergeSheetPickers() {
         errorBox.style.display = 'none';
         clearMergeColumnPreview();
-        mergeSheetWrap.style.display = 'none';
-        mergeSheet.innerHTML = '';
+        mergeSheetHost.innerHTML = '';
+        mergeSheetHost.style.display = 'none';
         mergeBtn.disabled = true;
         if (!pickedFiles || pickedFiles.length < 2) {
           return;
         }
+        const files = Array.from(pickedFiles);
         try {
-          const fd = new FormData();
-          fd.append('file', pickedFiles[0]);
-          fd.append('sheet_index', '0');
-          const res = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
-          const d = await res.json();
-          if (d.error) throw new Error(d.error);
-          d.sheet_names.forEach((name, idx) => {
-            const opt = document.createElement('option');
-            opt.value = String(idx);
-            opt.textContent = name;
-            mergeSheet.appendChild(opt);
-          });
-          mergeSheetWrap.style.display = 'inline-flex';
+          for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const row = document.createElement('div');
+            row.className = 'filter-row merge-per-file-sheet-row';
+            row.style.marginBottom = '6px';
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'hint';
+            nameEl.style.margin = '0';
+            nameEl.style.fontWeight = '650';
+            nameEl.style.flex = '1 1 140px';
+            nameEl.style.wordBreak = 'break-word';
+            nameEl.textContent = file.name;
+
+            const lab = document.createElement('label');
+            lab.style.display = 'inline-flex';
+            lab.style.alignItems = 'center';
+            lab.style.gap = '0.35rem';
+            lab.style.margin = '0';
+
+            const sl = document.createElement('span');
+            sl.className = 'hint';
+            sl.style.margin = '0';
+            sl.style.whiteSpace = 'nowrap';
+            sl.textContent = 'Sheet';
+
+            const sel = document.createElement('select');
+            sel.className = 'merge-file-sheet-select';
+            sel.setAttribute('aria-label', `Sheet for ${file.name}`);
+
+            lab.appendChild(sl);
+            lab.appendChild(sel);
+            row.appendChild(nameEl);
+            row.appendChild(lab);
+            mergeSheetHost.appendChild(row);
+
+            const fd = new FormData();
+            fd.append('file', file);
+            fd.append('sheet_index', '0');
+            const res = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
+            const d = await res.json();
+            if (d.error) throw new Error(`${file.name}: ${d.error}`);
+            d.sheet_names.forEach((sheetName, idx) => {
+              const opt = document.createElement('option');
+              opt.value = String(idx);
+              opt.textContent = sheetName;
+              sel.appendChild(opt);
+            });
+            sel.value = '0';
+          }
+          mergeSheetHost.style.display = 'block';
           mergeBtn.disabled = false;
           void refreshMergeColumnPreview();
         } catch (e) {
@@ -2426,7 +2614,9 @@
         }
       }
 
-      mergeSheet.addEventListener('change', () => { void refreshMergeColumnPreview(); });
+      mergeSheetHost.addEventListener('change', e => {
+        if (e.target.classList.contains('merge-file-sheet-select')) void refreshMergeColumnPreview();
+      });
 
       function setFiles(files) {
         pickedFiles = files && files.length ? files : null;
@@ -2438,7 +2628,7 @@
           fileList.style.display = 'none';
         }
         errorBox.style.display = 'none';
-        void refreshMergeSheetList();
+        void rebuildMergeSheetPickers();
       }
 
       dropZone.addEventListener('click', () => fileInput.click());
@@ -2460,7 +2650,9 @@
           const fd = new FormData();
           Array.from(pickedFiles).forEach(f => fd.append('files', f));
           if (addSource.checked) fd.append('add_source', '1');
-          if (mergeSheet.options.length) fd.append('sheet_index', mergeSheet.value);
+          const sis = Array.from(mergeSheetHost.querySelectorAll('.merge-file-sheet-select')).map(s =>
+            parseInt(s.value, 10));
+          fd.append('sheet_indices_json', JSON.stringify(sis));
           const res = await fetch('/excel/merge', { method: 'POST', body: fd });
           if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
             const blob = await res.blob();

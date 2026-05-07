@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import io
-from typing import Any, Dict, List, Literal, Optional, Tuple
+import re
+from typing import Any, Dict, List, Literal, Optional, Pattern, Tuple, cast
 
 import openpyxl
 
-Mode = Literal["contains", "equals", "not_contains", "starts_with"]
+Mode = Literal["contains", "equals", "not_contains", "starts_with", "regex"]
+
+_FILTER_MODE_NAMES: frozenset[str] = frozenset(
+    {"contains", "equals", "not_contains", "starts_with", "regex"}
+)
 
 
 def normalize_cell(val: Any) -> str:
@@ -27,7 +32,17 @@ def resolve_column_index(headers: List[str], column_name: str) -> int:
     raise ValueError(f"Column not found: {column_name}")
 
 
-def row_matches(cell_text: str, mode: Mode, needle: str) -> bool:
+def row_matches(
+    cell_text: str,
+    mode: Mode,
+    needle: str,
+    *,
+    regex_pattern: Optional[Pattern[str]] = None,
+) -> bool:
+    if mode == "regex":
+        if regex_pattern is None:
+            return True
+        return regex_pattern.search(cell_text) is not None
     if not needle.strip():
         return True
     c = cell_text.lower()
@@ -51,10 +66,16 @@ def filter_dict_rows(
 ) -> List[Dict[str, Any]]:
     if not needle.strip():
         return list(rows)
+    rx: Optional[Pattern[str]] = None
+    if mode == "regex":
+        try:
+            rx = re.compile(needle)
+        except re.error as exc:
+            raise ValueError(f"Invalid regular expression: {exc}") from exc
     out: List[Dict[str, Any]] = []
     for row in rows:
         cell = normalize_cell(row.get(column_key, ""))
-        if row_matches(cell, mode, needle):
+        if row_matches(cell, mode, needle, regex_pattern=rx):
             out.append(row)
     return out
 
@@ -131,12 +152,13 @@ def peek_distinct(
 
 def filter_xlsx_to_bytes(
     path: str,
-    column_name: str,
-    mode: Mode,
-    needle: str,
+    filters: List[Tuple[str, str, str]],
     sheet_index: int = 0,
 ) -> bytes:
-    """Stream through a sheet and build a filtered workbook."""
+    """Stream through a sheet; keep rows that match every filter (same column twice = AND).
+
+    filters: list of (column_name, mode, needle_str). Empty list keeps all rows.
+    """
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         ws = wb[wb.sheetnames[sheet_index]]
@@ -149,16 +171,43 @@ def filter_xlsx_to_bytes(
             normalize_cell(h) if normalize_cell(h) else f"Column{i + 1}"
             for i, h in enumerate(header_row)
         ]
-        col_idx = resolve_column_index(headers, column_name)
+        resolved: List[Tuple[int, Mode, str, Optional[Pattern[str]]]] = []
+        for column_name_raw, mode_raw, needle in filters:
+            column_name_st = (column_name_raw or "").strip()
+            if not column_name_st:
+                raise ValueError("Each filter must include a column name.")
+
+            mode_s = (mode_raw or "contains").strip().lower()
+            if mode_s not in _FILTER_MODE_NAMES:
+                raise ValueError(f"Unsupported filter mode: {mode_raw!r}")
+
+            mode: Mode = cast(Mode, mode_s)
+            col_idx = resolve_column_index(headers, column_name_st)
+
+            rx: Optional[Pattern[str]] = None
+            if mode == "regex" and needle.strip():
+                try:
+                    rx = re.compile(needle)
+                except re.error as exc:
+                    raise ValueError(f"Invalid regular expression: {exc}") from exc
+            resolved.append((col_idx, mode, needle, rx))
 
         matching: List[Dict[str, Any]] = []
         for row in rows_iter:
             vals = list(row)
             while len(vals) < len(headers):
                 vals.append(None)
-            cell = normalize_cell(vals[col_idx] if col_idx < len(vals) else "")
-            if row_matches(cell, mode, needle if needle else ""):
-                matching.append({headers[i]: vals[i] for i in range(len(headers))})
+
+            omit = False
+            for col_idx, mode, needle, rx in resolved:
+                cell = normalize_cell(vals[col_idx] if col_idx < len(vals) else "")
+                if not row_matches(cell, mode, needle if needle else "", regex_pattern=rx):
+                    omit = True
+                    break
+            if omit:
+                continue
+
+            matching.append({headers[i]: vals[i] for i in range(len(headers))})
 
         return dict_rows_to_xlsx_bytes(matching, headers)
     finally:
@@ -229,21 +278,32 @@ def merge_xlsx_to_bytes(
     paths: List[str],
     filenames: List[str],
     add_source: bool = False,
+    sheet_indices: Optional[List[int]] = None,
+    *,
     sheet_index: int = 0,
 ) -> bytes:
-    """Merge the worksheet at sheet_index from each xlsx into one workbook. Raises ValueError if headers differ."""
+    """Merge one worksheet from each workbook into one sheet. Raises ValueError if headers differ.
+
+    Pass sheet_indices with one integer per file (matching paths order); or omit it and use
+    sheet_index for every file (legacy single-index behavior).
+    """
+    if sheet_indices is None:
+        sheet_indices = [sheet_index] * len(paths)
+    if len(sheet_indices) != len(paths):
+        raise ValueError("sheet_indices must have exactly one entry per file.")
+
     reference_headers: Optional[List[str]] = None
     all_rows: List[Dict] = []
 
-    for path, fname in zip(paths, filenames):
+    for path, fname, si in zip(paths, filenames, sheet_indices):
         wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
         names = wb.sheetnames
-        if sheet_index < 0 or sheet_index >= len(names):
+        if si < 0 or si >= len(names):
             wb.close()
             raise ValueError(
-                f"'{fname}': sheet index {sheet_index} out of range ({len(names)} sheet(s))."
+                f"'{fname}': sheet index {si} out of range ({len(names)} sheet(s))."
             )
-        ws = wb[names[sheet_index]]
+        ws = wb[names[si]]
         it = ws.iter_rows(values_only=True)
         headers = [normalize_cell(h) for h in next(it, [])]
         if reference_headers is None:
