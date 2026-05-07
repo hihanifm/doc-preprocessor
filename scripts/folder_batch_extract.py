@@ -4,8 +4,8 @@ Batch extraction via Docs Garage HTTP API: one .docx/.pdf per request → one .x
 
 Run on the same host as Flask (e.g. SSH to lab, BASE_URL=http://127.0.0.1:35050).
 
-LLM mode defaults to NDJSON progress from /extract (section-by-section lines on stderr, like the UI).
-Use --no-llm-progress-stream for one-shot JSON only.
+LLM mode defaults to NDJSON progress from the extraction stream (section-by-section lines on stderr, like the UI).
+Use --no-llm-progress-stream to suppress live progress lines.
 
 Requires the Flask app to be running. Uses stdlib only (no requests dependency).
 """
@@ -149,8 +149,8 @@ def _format_ndjson_progress_line(data: dict[str, Any]) -> str | None:
     return None
 
 
-def _parse_ndjson_extract_response(resp) -> dict[str, Any]:
-    """Read application/x-ndjson body from /extract; print progress to stderr."""
+def _parse_ndjson_extract_response(resp, *, print_progress: bool = True) -> dict[str, Any]:
+    """Read application/x-ndjson body from an extract stream; optionally print progress to stderr."""
     last: dict[str, Any] | None = None
     buf = b""
     while True:
@@ -167,8 +167,8 @@ def _parse_ndjson_extract_response(resp) -> dict[str, Any]:
             typ = o.get("type")
             if typ == "progress":
                 payload = o.get("data") or {}
-                msg = _format_ndjson_progress_line(payload)
-                if msg:
+                msg = _format_ndjson_progress_line(payload) if print_progress else None
+                if msg and print_progress:
                     _bulk_line(f"  llm: {msg}", flush=True)
             elif typ == "result":
                 last = o
@@ -196,43 +196,8 @@ def _parse_ndjson_extract_response(resp) -> dict[str, Any]:
         "file_results": last.get("file_results") or [],
     }
 
-
-def post_ndjson_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
-    """POST /extract expecting NDJSON progress + final result (LLM with llm_progress_stream on)."""
-    rel = "/extract"
-    url = urljoin(base_url.rstrip("/") + "/", rel.lstrip("/"))
-    file_bytes = path.read_bytes()
-    ctype, body = encode_multipart(
-        form,
-        "files",
-        path.name,
-        file_bytes,
-        _guess_mime(path),
-    )
-    req = Request(
-        url,
-        data=body,
-        method="POST",
-        headers={"Content-Type": ctype, **_extra_http_headers()},
-    )
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            if resp.headers.get("X-Extract-Stream") != "1":
-                raw = resp.read().decode("utf-8", errors="replace")
-                return json.loads(raw)
-            return _parse_ndjson_extract_response(resp)
-    except HTTPError as e:
-        try:
-            payload = json.loads(e.read().decode("utf-8", errors="replace"))
-        except Exception:
-            payload = {}
-        msg = payload.get("error") if isinstance(payload, dict) else None
-        if not msg:
-            msg = e.reason or str(e.code)
-        raise _runtime_http(msg, e.code) from e
-
-
-def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
+def _post_extract_job(base_url: str, path: Path, form: dict[str, str], timeout: float) -> str:
+    """POST /extract and return {job_id}."""
     rel = "/extract"
     url = urljoin(base_url.rstrip("/") + "/", rel.lstrip("/"))
     file_bytes = path.read_bytes()
@@ -252,7 +217,51 @@ def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: 
     try:
         with urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
-            return json.loads(raw)
+            payload = json.loads(raw)
+            job_id = payload.get("job_id") if isinstance(payload, dict) else None
+            if not job_id:
+                raise RuntimeError("Extract response missing job_id")
+            return str(job_id)
+    except HTTPError as e:
+        try:
+            payload = json.loads(e.read().decode("utf-8", errors="replace"))
+        except Exception:
+            payload = {}
+        msg = payload.get("error") if isinstance(payload, dict) else None
+        if not msg:
+            msg = e.reason or str(e.code)
+        raise _runtime_http(msg, e.code) from e
+
+
+def post_ndjson_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
+    """POST /extract then read NDJSON stream with progress."""
+    try:
+        job_id = _post_extract_job(base_url, path, form, timeout)
+        rel = f"/extract/{job_id}/stream"
+        url = urljoin(base_url.rstrip("/") + "/", rel.lstrip("/"))
+        req = Request(url, method="GET", headers={**_extra_http_headers()})
+        with urlopen(req, timeout=timeout) as resp:
+            return _parse_ndjson_extract_response(resp, print_progress=True)
+    except HTTPError as e:
+        try:
+            payload = json.loads(e.read().decode("utf-8", errors="replace"))
+        except Exception:
+            payload = {}
+        msg = payload.get("error") if isinstance(payload, dict) else None
+        if not msg:
+            msg = e.reason or str(e.code)
+        raise _runtime_http(msg, e.code) from e
+
+
+def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: float) -> dict[str, Any]:
+    """POST /extract then read NDJSON stream without printing progress."""
+    try:
+        job_id = _post_extract_job(base_url, path, form, timeout)
+        rel = f"/extract/{job_id}/stream"
+        url = urljoin(base_url.rstrip("/") + "/", rel.lstrip("/"))
+        req = Request(url, method="GET", headers={**_extra_http_headers()})
+        with urlopen(req, timeout=timeout) as resp:
+            return _parse_ndjson_extract_response(resp, print_progress=False)
     except HTTPError as e:
         try:
             payload = json.loads(e.read().decode("utf-8", errors="replace"))
@@ -362,9 +371,6 @@ def build_extract_form(args: argparse.Namespace) -> dict[str, str]:
         form["llm_user_hints"] = args.llm_user_hints
         if args.llm_stream is not None:
             form["llm_stream"] = args.llm_stream
-        # Default: omit llm_progress_stream → server uses "1" (NDJSON progress), same as UI.
-        if args.no_llm_progress_stream:
-            form["llm_progress_stream"] = "0"
     return form
 
 
