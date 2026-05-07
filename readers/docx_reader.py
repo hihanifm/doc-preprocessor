@@ -15,10 +15,29 @@ def _heading_level(paragraph):
         return 1
 
 
+def _cell_to_text(cell) -> str:
+    """
+    Text inside one table cell: paragraphs that belong directly to this cell,
+    plus any nested tables (recursive). python-docx ``cell.text`` omits nested
+    tables; ``cell.paragraphs`` excludes paragraphs inside nested tables.
+    """
+    parts: list[str] = []
+    for paragraph in cell.paragraphs:
+        t = paragraph.text.strip().replace("\n", " ")
+        if t:
+            parts.append(t)
+    for nested in cell.tables:
+        block = _table_to_text(nested)
+        if block:
+            # Flatten nested rows into one cell chunk so outer pipe-rows stay stable.
+            parts.append(block.replace("\n", "; "))
+    return " ".join(parts)
+
+
 def _table_to_text(table):
     lines = []
     for row in table.rows:
-        cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+        cells = [_cell_to_text(cell) for cell in row.cells]
         lines.append(" | ".join(cells))
     return "\n".join(lines)
 
@@ -41,7 +60,8 @@ def _iter_block_items(doc):
 def read_docx(path: str) -> str:
     """
     Convert a .docx file to a structured plain-text representation.
-    Headings become '## text', tables become pipe-delimited grids.
+    Headings become '## text', tables become pipe-delimited grids (including
+    nested tables flattened into their parent cells).
     """
     doc = Document(path)
     lines = []
