@@ -111,6 +111,43 @@
 
     /* Buttons */
     .btn-row { display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; align-items: center; }
+
+    .extract-disclaimer-dialog {
+      max-width: 32rem;
+      width: calc(100vw - 2rem);
+      padding: 0;
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius);
+      box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+      background: var(--surface);
+    }
+    .extract-disclaimer-dialog::backdrop {
+      background: rgba(15, 23, 42, 0.35);
+    }
+    .extract-disclaimer-dialog__inner {
+      padding: 22px 24px 8px;
+    }
+    .extract-disclaimer-dialog__inner h2 {
+      font-size: 1.08rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+      color: var(--text);
+    }
+    .extract-disclaimer-dialog__inner p {
+      font-size: 0.9rem;
+      line-height: 1.55;
+      color: #475569;
+      margin-bottom: 12px;
+    }
+    .extract-disclaimer-dialog__actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 14px 24px 18px;
+      border-top: 1px solid #f1f5f9;
+      background: #fafbfc;
+      border-radius: 0 0 var(--radius) var(--radius);
+    }
     .btn {
       display: inline-flex;
       align-items: center;
@@ -803,6 +840,24 @@
       <div id="error-list"></div>
       <div id="extract-summary" class="extract-summary"></div>
     </div>
+
+    <dialog id="extract-disclaimer-dialog" class="extract-disclaimer-dialog" aria-labelledby="extract-disclaimer-title">
+      <div class="extract-disclaimer-dialog__inner">
+        <h2 id="extract-disclaimer-title">Best-effort extraction</h2>
+        <p>
+          Extraction is a best-effort pipeline — incorrect parsing or row content is always possible.
+          Review the preview and spreadsheet after extraction before you rely on it for compliance or sign-off.
+        </p>
+        <p><strong>Keep this tab open</strong> to check extraction status and progress.</p>
+        <p>
+          Large documents may hit LLM timeouts; split files or use <strong>By section</strong> when you can.
+        </p>
+      </div>
+      <div class="extract-disclaimer-dialog__actions">
+        <button type="button" class="btn btn--muted" id="extract-disclaimer-cancel">Cancel</button>
+        <button type="button" class="btn btn--primary" id="extract-disclaimer-continue">Continue</button>
+      </div>
+    </dialog>
 
     </div><!-- panel-converter -->
 
@@ -2089,7 +2144,7 @@
     });
 
     // ── Extract ──────────────────────────────────────────────────────────────
-    extractBtn.addEventListener('click', async () => {
+    async function runExtractPipeline() {
       if (!selectedFiles.length) return;
       extractBtn.disabled = true;
       cancelExtractBtn.disabled = false;
@@ -2214,6 +2269,27 @@
         delete extractBtn.dataset.prevLabel;
         activeExtractController = null;
         activeExtractJobId = null;
+      }
+    }
+
+    const extractDisclaimerDialog = document.getElementById('extract-disclaimer-dialog');
+    extractBtn.addEventListener('click', () => {
+      if (!selectedFiles.length) return;
+      extractDisclaimerDialog.showModal();
+      document.getElementById('extract-disclaimer-continue').focus();
+    });
+    document.getElementById('extract-disclaimer-cancel').addEventListener('click', () => {
+      extractDisclaimerDialog.close();
+    });
+    document.getElementById('extract-disclaimer-continue').addEventListener('click', async (e) => {
+      const cont = e.currentTarget;
+      if (cont.disabled) return;
+      cont.disabled = true;
+      extractDisclaimerDialog.close();
+      try {
+        await runExtractPipeline();
+      } finally {
+        cont.disabled = false;
       }
     });
 
