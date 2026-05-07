@@ -937,6 +937,19 @@
             <label for="join-key-col" class="hint" style="margin:0; white-space:nowrap;">Key column</label>
             <select id="join-key-col" style="flex:1;" aria-label="Key column — must exist on left and right"></select>
           </div>
+          <fieldset id="join-overlap-group" style="margin:0.75rem 0 0; padding:0; border:none;">
+            <legend class="hint" style="padding:0; margin:0 0 0.4rem; font-weight:650;">When a selected right column already exists on the left</legend>
+            <div class="filter-row" style="align-items:flex-start; gap:1rem; flex-wrap:wrap;">
+              <label style="display:flex; gap:0.4rem; margin:0; cursor:pointer; max-width:19rem;">
+                <input type="radio" name="join-overlap" id="join-overlap-replace" value="replace" checked />
+                <span class="hint" style="margin:0;">Replace values in that left column with the right</span>
+              </label>
+              <label style="display:flex; gap:0.4rem; margin:0; cursor:pointer; max-width:19rem;">
+                <input type="radio" name="join-overlap" id="join-overlap-add" value="add" />
+                <span class="hint" style="margin:0;">Keep the left column — add the right as a new column (suffix <code>(from right)</code>)</span>
+              </label>
+            </div>
+          </fieldset>
           <div id="join-col-list" style="margin-top:0.75rem;"></div>
           <div style="margin-top:0.75rem;">
             <button type="button" class="btn btn--primary" id="join-download-btn" disabled>Join &amp; Download</button>
@@ -2849,6 +2862,8 @@
           fd.append('key_col', keySelect.value);
           fd.append('target_sheet_index', targetSheetSel.value);
           fd.append('source_sheet_index', sourceSheetSel.value);
+          const overlapEl = document.querySelector('input[name="join-overlap"]:checked');
+          fd.append('join_overlap', (overlapEl && overlapEl.value) || 'replace');
           colList.querySelectorAll('.join-col-cb:checked').forEach(cb => fd.append('columns', cb.value));
           const res = await fetch('/excel/join', { method: 'POST', body: fd });
           if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {

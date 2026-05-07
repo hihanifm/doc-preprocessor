@@ -324,6 +324,18 @@ def merge_xlsx_to_bytes(
     return dict_rows_to_xlsx_bytes(all_rows, out_headers)
 
 
+def _unique_from_right_column(base: str, taken: set[str]) -> str:
+    candidate = f"{base} (from right)"
+    if candidate not in taken:
+        return candidate
+    n = 2
+    while True:
+        candidate = f"{base} (from right) [{n}]"
+        if candidate not in taken:
+            return candidate
+        n += 1
+
+
 def join_xlsx_to_bytes(
     target_path: str,
     source_path: str,
@@ -332,8 +344,13 @@ def join_xlsx_to_bytes(
     *,
     target_sheet_index: int = 0,
     source_sheet_index: int = 0,
+    overlap: Literal["replace", "add"] = "replace",
 ) -> bytes:
-    """LEFT JOIN target with source on key_col; copy selected columns. First source match wins."""
+    """LEFT JOIN target with source on key_col; copy selected columns. First source match wins.
+
+    When a copied column header already exists on the target, overlap=replace overwrites those
+    cells from the right; overlap=add appends a new suffixed column such as 'Name (from right)'.
+    """
     src_wb = openpyxl.load_workbook(source_path, read_only=True, data_only=True)
     src_names = src_wb.sheetnames
     if source_sheet_index < 0 or source_sheet_index >= len(src_names):
@@ -367,16 +384,35 @@ def join_xlsx_to_bytes(
     if key_col not in tgt_headers:
         raise ValueError(f"Key column '{key_col}' not found in target file.")
 
-    extra = [c for c in columns_to_copy if c not in tgt_headers]
-    out_headers = tgt_headers + extra
+    if overlap not in ("replace", "add"):
+        raise ValueError("overlap must be 'replace' or 'add'.")
+
+    taken: set[str] = set(tgt_headers)
+    ordered_out_headers: List[str] = list(tgt_headers)
+    col_dest: Dict[str, str] = {}
+
+    for c in columns_to_copy:
+        if c in tgt_headers:
+            if overlap == "replace":
+                col_dest[c] = c
+            else:
+                nm = _unique_from_right_column(c, taken)
+                col_dest[c] = nm
+                ordered_out_headers.append(nm)
+                taken.add(nm)
+        else:
+            col_dest[c] = c
+            if c not in taken:
+                ordered_out_headers.append(c)
+                taken.add(c)
 
     all_rows = []
     for row in tgt_it:
         d = {tgt_headers[i]: normalize_cell(v) for i, v in enumerate(row)}
         src_row = lookup.get(d.get(key_col, ""), {})
         for col in columns_to_copy:
-            d[col] = src_row.get(col, "")
+            d[col_dest[col]] = src_row.get(col, "")
         all_rows.append(d)
     tgt_wb.close()
 
-    return dict_rows_to_xlsx_bytes(all_rows, out_headers)
+    return dict_rows_to_xlsx_bytes(all_rows, ordered_out_headers)

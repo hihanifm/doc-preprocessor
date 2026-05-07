@@ -1001,6 +1001,9 @@ def excel_join():
             source_tmp = t.name
         target_sheet_index = int(request.form.get("target_sheet_index", 0))
         source_sheet_index = int(request.form.get("source_sheet_index", 0))
+        join_overlap = (request.form.get("join_overlap") or "replace").strip().lower()
+        if join_overlap not in ("replace", "add"):
+            return jsonify({"error": "join_overlap must be 'replace' or 'add'."}), 400
         data = join_xlsx_to_bytes(
             target_tmp,
             source_tmp,
@@ -1008,6 +1011,7 @@ def excel_join():
             columns_to_copy,
             target_sheet_index=target_sheet_index,
             source_sheet_index=source_sheet_index,
+            overlap=join_overlap,
         )
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
