@@ -137,6 +137,11 @@
       color: #fff;
     }
     .btn--success:hover:not(:disabled) { box-shadow: var(--shadow-ok); filter: brightness(1.03); }
+    .btn--danger {
+      background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+      color: #fff;
+    }
+    .btn--danger:hover:not(:disabled) { box-shadow: 0 4px 16px rgba(220, 38, 38, 0.32); filter: brightness(1.03); }
     #download-btn { display: none; }
     #download-btn.is-shown { display: inline-flex; }
     .btn--secondary {
@@ -771,6 +776,7 @@
 
     <div class="btn-row">
       <button type="button" class="btn btn--primary" id="extract-btn" disabled>Extract Test Cases</button>
+      <button type="button" class="btn btn--danger" id="cancel-extract-btn" disabled>Cancel</button>
       <button type="button" class="btn btn--success" id="download-btn">Download Excel</button>
       <button type="button" class="btn btn--secondary" id="preview-btn" disabled>Preview Parsed Text</button>
       <button type="button" class="btn btn--secondary" id="sample-btn">Load Word sample</button>
@@ -1147,6 +1153,7 @@
     const fileInput   = document.getElementById('file-input');
     const fileList    = document.getElementById('file-list');
     const extractBtn  = document.getElementById('extract-btn');
+    const cancelExtractBtn = document.getElementById('cancel-extract-btn');
     const downloadBtn = document.getElementById('download-btn');
     const previewBtn  = document.getElementById('preview-btn');
     const sampleBtn   = document.getElementById('sample-btn');
@@ -1747,8 +1754,10 @@
     }
 
     let extractProgressTimer = null;
+    let extractProgressActive = false;
 
     function stopExtractProgress() {
+      extractProgressActive = false;
       if (extractProgressTimer != null) {
         clearInterval(extractProgressTimer);
         extractProgressTimer = null;
@@ -1810,8 +1819,10 @@
 
     function startExtractProgress(extractMode, fileCount, llmSectionsMode, llmRegexSections) {
       stopExtractProgress();
+      extractProgressActive = true;
       const start = Date.now();
       const tick = () => {
+        if (!extractProgressActive) return;
         const elapsedMs = Date.now() - start;
         setStatus(
           buildExtractLoadingHtml(
@@ -1831,6 +1842,26 @@
     /** NDJSON /extract progress (LLM): section titles, row counts, file index */
     let ndjsonProgressPayload = null;
     const EXTRACT_JOB_KEY = 'extract_job_id';
+    let activeExtractController = null;
+    let activeExtractJobId = null;
+
+    function isAbortError(err) {
+      return !!err && (err.name === 'AbortError' || /aborted/i.test(String(err.message || '')));
+    }
+
+    async function cancelActiveExtraction() {
+      const jobId = activeExtractJobId || localStorage.getItem(EXTRACT_JOB_KEY);
+      if (jobId) {
+        try {
+          await fetch(`/extract/${jobId}/cancel`, { method: 'POST' });
+        } catch (_) {}
+      }
+      try { localStorage.removeItem(EXTRACT_JOB_KEY); } catch (_) {}
+      activeExtractJobId = null;
+      if (activeExtractController) {
+        try { activeExtractController.abort(); } catch (_) {}
+      }
+    }
     function buildLlmLiveProgressInner(payload) {
       if (!payload || !payload.step) return '';
       const fname = payload.file
@@ -1891,6 +1922,7 @@
     }
 
     function setLlmLiveProgress(payload, elapsedMs, fileCount) {
+      if (!extractProgressActive) return;
       const elapsed = formatExtractElapsed(elapsedMs);
       const nf = fileCount === 1 ? '1 file' : `${fileCount} files`;
       const meta = `${nf} · ${elapsed} elapsed`;
@@ -1910,8 +1942,10 @@
 
     function startLlmNdjsonProgressTicker(fileCount, startedAt) {
       stopExtractProgress();
+      extractProgressActive = true;
       ndjsonProgressPayload = null;
       const tick = () => {
+        if (!extractProgressActive) return;
         const elapsedMs = Date.now() - startedAt;
         setLlmLiveProgress(ndjsonProgressPayload, elapsedMs, fileCount);
       };
@@ -1945,6 +1979,7 @@
           await sleepMs(delaySec * 1000);
         } catch (e) {
           lastErr = e;
+          if (isAbortError(e)) throw e;
           if (attempt >= maxAttempts - 1) {
             throw e;
           }
@@ -2088,6 +2123,7 @@
     extractBtn.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
       extractBtn.disabled = true;
+      cancelExtractBtn.disabled = false;
       extractBtn.setAttribute('aria-busy', 'true');
       extractBtn.dataset.prevLabel = extractBtn.textContent;
       extractBtn.textContent = 'Working…';
@@ -2106,6 +2142,8 @@
       document.getElementById('converter-outcome')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
       startLlmNdjsonProgressTicker(selectedFiles.length, startedAt);
+      activeExtractController = new AbortController();
+      activeExtractJobId = null;
 
       form.append('mode', extractMode);
       if (extractMode === 'llm') {
@@ -2122,14 +2160,19 @@
       }
 
       try {
-        const postResp = await fetchExtractWithRetry('/extract', { method: 'POST', body: form }, 10);
+        const postResp = await fetchExtractWithRetry(
+          '/extract',
+          { method: 'POST', body: form, signal: activeExtractController.signal },
+          10
+        );
         if (!postResp.ok) {
           const errData = await postResp.json().catch(() => ({}));
           throw new Error(errData.error || 'Server error');
         }
         const { job_id } = await postResp.json();
         localStorage.setItem(EXTRACT_JOB_KEY, job_id);
-        const streamResp = await fetch(`/extract/${job_id}/stream`);
+        activeExtractJobId = job_id;
+        const streamResp = await fetch(`/extract/${job_id}/stream`, { signal: activeExtractController.signal });
         if (!streamResp.ok) throw new Error('Stream unavailable');
         const data = await readNdjsonExtract(streamResp, startedAt, selectedFiles.length);
 
@@ -2201,14 +2244,33 @@
           downloadBtn.classList.add('is-shown');
         }
       } catch (err) {
-        setStatus(`Error: ${esc(err.message)}`, 'error');
+        stopExtractProgress();
+        if (isAbortError(err)) {
+          setStatus('Cancelled.', 'warning');
+        } else {
+          setStatus(`Error: ${esc(err.message)}`, 'error');
+        }
       } finally {
         stopExtractProgress();
         extractBtn.disabled = false;
+        cancelExtractBtn.disabled = true;
         extractBtn.removeAttribute('aria-busy');
         extractBtn.textContent = extractBtn.dataset.prevLabel || 'Extract Test Cases';
         delete extractBtn.dataset.prevLabel;
+        activeExtractController = null;
+        activeExtractJobId = null;
       }
+    });
+
+    cancelExtractBtn.addEventListener('click', async () => {
+      cancelExtractBtn.disabled = true;
+      await cancelActiveExtraction();
+      stopExtractProgress();
+      extractBtn.disabled = !selectedFiles.length;
+      extractBtn.removeAttribute('aria-busy');
+      extractBtn.textContent = extractBtn.dataset.prevLabel || 'Extract Test Cases';
+      delete extractBtn.dataset.prevLabel;
+      setStatus('Cancelled.', 'warning');
     });
 
     function renderPreview(rows) {
@@ -2893,9 +2955,15 @@
     (async function tryRejoinJob() {
       const jobId = localStorage.getItem(EXTRACT_JOB_KEY);
       if (!jobId) return;
-      const streamResp = await fetch(`/extract/${jobId}/stream`).catch(() => null);
+      activeExtractController = new AbortController();
+      activeExtractJobId = jobId;
+      cancelExtractBtn.disabled = false;
+      const streamResp = await fetch(`/extract/${jobId}/stream`, { signal: activeExtractController.signal }).catch(() => null);
       if (!streamResp || !streamResp.ok) {
         localStorage.removeItem(EXTRACT_JOB_KEY);
+        cancelExtractBtn.disabled = true;
+        activeExtractController = null;
+        activeExtractJobId = null;
         return;
       }
       const startedAt = Date.now();
@@ -2907,10 +2975,18 @@
         downloadBtn.classList.add('is-shown');
         setStatus(`<strong>${extractedRows.length}</strong> row(s) ready (reconnected).`, 'ok');
       } catch (err) {
-        setStatus(`Reconnect error: ${esc(err.message)}`, 'error');
+        stopExtractProgress();
+        if (isAbortError(err)) {
+          setStatus('Cancelled.', 'warning');
+        } else {
+          setStatus(`Reconnect error: ${esc(err.message)}`, 'error');
+        }
         localStorage.removeItem(EXTRACT_JOB_KEY);
       } finally {
         stopExtractProgress();
+        cancelExtractBtn.disabled = true;
+        activeExtractController = null;
+        activeExtractJobId = null;
       }
     })();
   </script>

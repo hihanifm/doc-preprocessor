@@ -33,6 +33,9 @@ def _configure_logging() -> None:
 _configure_logging()
 logger = logging.getLogger(__name__)
 
+class _ExtractCancelled(Exception):
+    pass
+
 
 class _ExtractRequestLogAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
@@ -192,6 +195,7 @@ def _extract_core(
     llm_section_regex_hints: str,
     llm_user_hints: str,
     llm_stream: bool | None,
+    cancelled: Callable[[], bool] | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     all_rows: list = []
@@ -202,6 +206,8 @@ def _extract_core(
     fi = 0
 
     for item in work_list:
+        if cancelled and cancelled():
+            raise _ExtractCancelled("Cancelled")
         if item.get("kind") == "bad":
             display_name = item["display_name"]
             if item.get("reason") == "unsupported":
@@ -269,6 +275,8 @@ def _extract_core(
                 continue
 
             if mode == "llm":
+                if cancelled and cancelled():
+                    raise _ExtractCancelled("Cancelled")
                 tpl_label = f"LLM ({llm_model})"
                 rows, llm_doc_meta = extract_with_llm(
                     doc_text,
@@ -409,7 +417,12 @@ _JOBS: dict[str, dict] = {}
 
 def _job_create() -> str:
     job_id = uuid.uuid4().hex[:12]
-    _JOBS[job_id] = {"events": [], "done": False, "cond": threading.Condition()}
+    _JOBS[job_id] = {
+        "events": [],
+        "done": False,
+        "cancelled": False,
+        "cond": threading.Condition(),
+    }
     return job_id
 
 
@@ -421,6 +434,25 @@ def _job_append(job_id: str, event: dict, *, done: bool = False) -> None:
         if done:
             job["done"] = True
         job["cond"].notify_all()
+
+def _job_cancel(job_id: str, message: str = "Cancelled") -> None:
+    job = _JOBS.get(job_id)
+    if job is None:
+        return
+    with job["cond"]:
+        if job.get("done"):
+            return
+        job["cancelled"] = True
+        job["events"].append(json.dumps({"type": "error", "message": message}, ensure_ascii=False) + "\n")
+        job["done"] = True
+        job["cond"].notify_all()
+
+
+def _job_is_cancelled(job_id: str) -> bool:
+    job = _JOBS.get(job_id)
+    if job is None:
+        return False
+    return bool(job.get("cancelled"))
 
 
 def _job_iter(job_id: str):
@@ -672,6 +704,11 @@ def extract():
 
     def _worker():
         try:
+            def _progress(ev: dict[str, Any]) -> None:
+                if _job_is_cancelled(job_id):
+                    raise _ExtractCancelled("Cancelled")
+                _job_append(job_id, {"type": "progress", "data": ev})
+
             payload = _extract_core(
                 work_list,
                 mode=mode,
@@ -684,7 +721,8 @@ def extract():
                 llm_section_regex_hints=llm_section_regex_hints,
                 llm_user_hints=llm_user_hints,
                 llm_stream=llm_stream,
-                progress=lambda ev: _job_append(job_id, {"type": "progress", "data": ev}),
+                cancelled=lambda: _job_is_cancelled(job_id),
+                progress=_progress,
             )
             log.info(
                 "POST /extract job=%s done ip=%s mode=%s rows=%d errors=%d file_results=%d",
@@ -694,6 +732,9 @@ def extract():
                 len(payload.get("file_results") or []),
             )
             _job_append(job_id, {"type": "result", **payload}, done=True)
+        except _ExtractCancelled:
+            log.info("POST /extract job=%s cancelled ip=%s", job_id, _client_ip())
+            _job_cancel(job_id, "Cancelled")
         except Exception as e:
             log.exception("POST /extract job=%s worker failed ip=%s", job_id, _client_ip())
             _job_append(job_id, {"type": "error", "message": str(e)}, done=True)
@@ -713,6 +754,13 @@ def extract_stream(job_id: str):
         mimetype="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Extract-Stream": "1"},
     )
+
+@app.route("/extract/<job_id>/cancel", methods=["POST"])
+def extract_cancel(job_id: str):
+    if job_id not in _JOBS:
+        return jsonify({"error": "job not found"}), 404
+    _job_cancel(job_id, "Cancelled")
+    return jsonify({"ok": True})
 
 
 @app.route("/download", methods=["POST"])
