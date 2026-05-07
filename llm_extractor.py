@@ -135,12 +135,13 @@ def _llm_io_log_request(
     _append_llm_io_file("\n" + "=" * 72 + "\n" + body + "\n")
 
 
-def _llm_io_log_response_ok(*, assistant_text: str, row_count: int) -> None:
+def _llm_io_log_response_ok(*, assistant_text: str, row_count: int, raw_response: dict | None = None) -> None:
     if not _resolve_llm_io_log_path():
         return
     block = {
         "event": "llm_chat_completion_response",
         "time_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_response": raw_response,
         "assistant_text": assistant_text,
         "normalized_row_count": row_count,
     }
@@ -632,8 +633,9 @@ def _extract_with_llm_single_pass(
                 }
             )
 
-        def _do_call() -> str:
+        def _do_call() -> tuple[str, dict | None]:
             content = ""
+            raw_data: dict | None = None
 
             if use_stream:
                 log.debug("LLM extract using streaming (SSE)")
@@ -650,12 +652,12 @@ def _extract_with_llm_single_pass(
 
             if not content.strip():
                 try:
-                    data = _post_json(url, headers, payload_json, timeout)
+                    raw_data = _post_json(url, headers, payload_json, timeout)
                 except LlmExtractError as first:
                     if "HTTP error 400" not in str(first):
                         raise
-                    data = _post_json(url, headers, payload, timeout)
-                choices = data.get("choices") or []
+                    raw_data = _post_json(url, headers, payload, timeout)
+                choices = raw_data.get("choices") or []
                 if not choices:
                     raise LlmExtractError("LLM returned no choices.")
                 try:
@@ -664,9 +666,9 @@ def _extract_with_llm_single_pass(
                 except (TypeError, KeyError, IndexError) as e:
                     raise LlmExtractError(f"Unexpected LLM response shape: {e}") from None
 
-            return content
+            return content, raw_data
 
-        content = _with_llm_retries(
+        content, raw_response = _with_llm_retries(
             _do_call,
             progress=progress,
             file_name=file_name,
@@ -692,7 +694,7 @@ def _extract_with_llm_single_pass(
             if not isinstance(item, dict):
                 continue
             rows.append(_normalize_case(item, file_name))
-        _llm_io_log_response_ok(assistant_text=content, row_count=len(rows))
+        _llm_io_log_response_ok(assistant_text=content, row_count=len(rows), raw_response=raw_response)
         if progress and section_title is None:
             progress(
                 {
