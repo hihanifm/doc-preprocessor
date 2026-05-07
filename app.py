@@ -422,6 +422,9 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 _JOBS: dict[str, dict] = {}
 
+_ACTIVE_BATCH: dict | None = None
+_BATCH_LOCK = threading.Lock()
+
 
 def _job_create() -> str:
     job_id = uuid.uuid4().hex[:12]
@@ -702,6 +705,8 @@ def extract():
     )
 
     job_id = _job_create()
+    output_path = (request.form.get("output_path") or "").strip() or None
+    _JOBS[job_id]["output_path"] = output_path
     # Worker runs outside Flask request context — capture IP once here for logs.
     worker_client_ip = _client_ip()
 
@@ -734,6 +739,19 @@ def extract():
                 len(payload.get("errors") or []),
                 len(payload.get("file_results") or []),
             )
+            _out = _JOBS[job_id].get("output_path")
+            if _out and payload.get("rows"):
+                try:
+                    _tmp = _out + f".{job_id}.tmp"
+                    _parent = os.path.dirname(_out)
+                    if _parent:
+                        os.makedirs(_parent, exist_ok=True)
+                    with open(_tmp, "wb") as _f:
+                        _f.write(to_excel(payload["rows"]))
+                    os.replace(_tmp, _out)
+                    log.info("job_id=%s wrote %d rows to %s", job_id, len(payload["rows"]), _out)
+                except Exception:
+                    log.exception("job_id=%s failed to write xlsx to %s", job_id, _out)
             _job_append(job_id, {"type": "result", **payload}, done=True)
         except _ExtractCancelled:
             log.info("POST /extract job=%s cancelled ip=%s", job_id, worker_client_ip)
@@ -764,6 +782,50 @@ def extract_cancel(job_id: str):
         return jsonify({"error": "job not found"}), 404
     _job_cancel(job_id, "Cancelled")
     return jsonify({"ok": True})
+
+
+@app.route("/batch/start", methods=["POST"])
+def batch_start():
+    global _ACTIVE_BATCH
+    output_dir = (request.form.get("output_dir") or "").strip()
+    reconnect = (request.form.get("reconnect") or "").strip() in ("1", "true", "yes")
+    with _BATCH_LOCK:
+        if _ACTIVE_BATCH is not None and not reconnect:
+            return jsonify({
+                "ok": False,
+                "message": "A batch is already running.",
+                "output_dir": _ACTIVE_BATCH["output_dir"],
+                "started": _ACTIVE_BATCH["started"],
+            }), 409
+        _ACTIVE_BATCH = {
+            "output_dir": output_dir,
+            "started": datetime.now(timezone.utc).isoformat(),
+        }
+    return jsonify({"ok": True})
+
+
+@app.route("/batch/done", methods=["POST"])
+def batch_done():
+    global _ACTIVE_BATCH
+    with _BATCH_LOCK:
+        _ACTIVE_BATCH = None
+    return jsonify({"ok": True})
+
+
+@app.route("/batch/cancel", methods=["POST"])
+def batch_cancel():
+    global _ACTIVE_BATCH
+    with _BATCH_LOCK:
+        _ACTIVE_BATCH = None
+    return jsonify({"ok": True})
+
+
+@app.route("/batch/status", methods=["GET"])
+def batch_status():
+    with _BATCH_LOCK:
+        if _ACTIVE_BATCH is None:
+            return jsonify({"active": False})
+        return jsonify({"active": True, **_ACTIVE_BATCH})
 
 
 @app.route("/download", methods=["POST"])

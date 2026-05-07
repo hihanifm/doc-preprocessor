@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urljoin, urlopen
 
 T = TypeVar("T")
@@ -279,21 +279,42 @@ def post_json_extract(base_url: str, path: Path, form: dict[str, str], timeout: 
         raise _runtime_http(msg, e.code) from e
 
 
-def post_download(base_url: str, rows: list[dict[str, Any]], timeout: float) -> bytes:
-    url = urljoin(base_url.rstrip("/") + "/", "download")
-    body = json.dumps({"rows": rows}, ensure_ascii=False).encode("utf-8")
-    req = Request(
-        url,
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json", **_extra_http_headers()},
-    )
+def _post_batch_start(base_url: str, output_dir: str, reconnect: bool, timeout: float) -> dict:
+    url = urljoin(base_url.rstrip("/") + "/", "batch/start")
+    fields: dict[str, str] = {"output_dir": output_dir}
+    if reconnect:
+        fields["reconnect"] = "1"
+    body = urlencode(fields).encode("utf-8")
+    req = Request(url, data=body, method="POST",
+                  headers={"Content-Type": "application/x-www-form-urlencoded", **_extra_http_headers()})
     try:
         with urlopen(req, timeout=timeout) as resp:
-            return resp.read()
+            return json.loads(resp.read().decode("utf-8"))
     except HTTPError as e:
-        msg = f"download HTTP {e.code}: {e.reason}"
-        raise _runtime_http(msg, e.code) from e
+        try:
+            return json.loads(e.read().decode("utf-8", errors="replace"))
+        except Exception:
+            raise _runtime_http(f"batch/start HTTP {e.code}", e.code) from e
+
+
+def _post_batch_done(base_url: str, timeout: float) -> None:
+    url = urljoin(base_url.rstrip("/") + "/", "batch/done")
+    req = Request(url, data=b"", method="POST", headers={**_extra_http_headers()})
+    try:
+        with urlopen(req, timeout=min(timeout, 10.0)) as resp:
+            resp.read()
+    except Exception:
+        pass
+
+
+def _post_batch_cancel(base_url: str, timeout: float) -> None:
+    url = urljoin(base_url.rstrip("/") + "/", "batch/cancel")
+    req = Request(url, data=b"", method="POST", headers={**_extra_http_headers()})
+    try:
+        with urlopen(req, timeout=min(timeout, 10.0)) as resp:
+            resp.read()
+    except Exception:
+        pass
 
 
 def is_retryable(exc: BaseException) -> bool:
@@ -520,11 +541,6 @@ def _coerce_config_values(cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _api_urls(base: str) -> tuple[str, str]:
-    b = base.rstrip("/") + "/"
-    return urljoin(b, "extract"), urljoin(b, "download")
-
-
 def _log_proxy_env() -> None:
     keys = (
         "HTTP_PROXY",
@@ -559,7 +575,7 @@ def _log_startup(
     retry_enabled: bool,
     max_att: int,
 ) -> None:
-    extract_u, download_u = _api_urls(args.base_url)
+    extract_u = urljoin(args.base_url.rstrip("/") + "/", "extract")
     _bulk_line("══ folder_batch_extract ══")
     _bulk_line(
         f"session X-Request-ID={_HTTP_SESSION_ID} "
@@ -574,7 +590,6 @@ def _log_startup(
     _bulk_line(f"mode:        {form.get('mode', args.mode)}")
     _bulk_line(f"base-url:    {args.base_url}")
     _bulk_line(f"POST         {extract_u}")
-    _bulk_line(f"POST         {download_u}")
     _bulk_line(f"HTTP timeout per request: {args.timeout}s")
     _bulk_line(
         f"retries:     {'on' if retry_enabled else 'off'} "
@@ -720,6 +735,18 @@ def main() -> int:
         help="Disable NDJSON progress from /extract (one JSON response; no section-by-section lines). "
         "Default is progress stream for LLM mode (matches the web UI).",
     )
+    parser.add_argument(
+        "--cancel",
+        action="store_true",
+        default=False,
+        help="Cancel the currently running batch and exit.",
+    )
+    parser.add_argument(
+        "--reconnect",
+        action="store_true",
+        default=False,
+        help="Take over a running batch and continue from where it left off.",
+    )
 
     parsed = parser.parse_args()
 
@@ -743,6 +770,11 @@ def main() -> int:
         return 2
 
     args = argparse.Namespace(**merged)
+
+    if args.cancel:
+        _post_batch_cancel(args.base_url, args.timeout)
+        _bulk_line("Batch cancelled.", file=sys.stdout)
+        return 0
 
     global _BULK_PREFIX, _HTTP_SESSION_ID
     _sid = uuid.uuid4().hex[:12]
@@ -787,6 +819,16 @@ def main() -> int:
     retry_enabled = not args.no_retry
     max_att = max(1, args.max_retries)
 
+    batch_result = _post_batch_start(args.base_url, str(output_dir), args.reconnect, args.timeout)
+    if not batch_result.get("ok"):
+        _bulk_line(
+            f"Batch already running (output: {batch_result.get('output_dir')}, "
+            f"started: {batch_result.get('started')}).\n"
+            "[bulk] Use --reconnect to take over or --cancel to stop.",
+            file=sys.stderr,
+        )
+        return 1
+
     _log_startup(
         args=args,
         form=form,
@@ -802,112 +844,109 @@ def main() -> int:
     ok_count = 0
     skip_count = 0
 
-    for idx, doc_path in enumerate(files, start=1):
-        rel = doc_path.name
-        _bulk_line(f"[{idx}/{len(files)}] {doc_path}", file=sys.stdout, flush=True)
-        out_xlsx = output_path_for(doc_path, output_dir, args.disambiguate_ext)
-        if not args.force and out_xlsx.is_file():
-            skip_count += 1
-            _bulk_line(f"  skip: output exists → {out_xlsx.name}", file=sys.stdout, flush=True)
-            continue
+    try:
+        for idx, doc_path in enumerate(files, start=1):
+            rel = doc_path.name
+            _bulk_line(f"[{idx}/{len(files)}] {doc_path}", file=sys.stdout, flush=True)
+            out_xlsx = output_path_for(doc_path, output_dir, args.disambiguate_ext)
+            if not args.force and out_xlsx.is_file():
+                skip_count += 1
+                _bulk_line(f"  skip: output exists → {out_xlsx.name}", file=sys.stdout, flush=True)
+                continue
 
-        try:
+            file_form = {**form, "output_path": str(out_xlsx)}
 
-            def do_extract() -> dict[str, Any]:
-                return post_extract_dispatch(
-                    args.base_url,
-                    doc_path,
-                    form,
-                    args.timeout,
-                    llm_progress_stream=llm_progress_stream,
+            try:
+
+                def do_extract() -> dict[str, Any]:
+                    return post_extract_dispatch(
+                        args.base_url,
+                        doc_path,
+                        file_form,
+                        args.timeout,
+                        llm_progress_stream=llm_progress_stream,
+                    )
+
+                data = call_with_retry(
+                    "extract",
+                    do_extract,
+                    max_attempts=max_att,
+                    enabled=retry_enabled,
                 )
 
-            data = call_with_retry(
-                "extract",
-                do_extract,
-                max_attempts=max_att,
-                enabled=retry_enabled,
-            )
+                errs = data.get("errors") or []
+                rows = data.get("rows") or []
+                frs = data.get("file_results") or []
 
-            errs = data.get("errors") or []
-            rows = data.get("rows") or []
-            frs = data.get("file_results") or []
+                fr = frs[0] if frs else {}
+                if not fr.get("ok", True):
+                    rec = {
+                        "file": rel,
+                        "phase": "extract",
+                        "reason": fr.get("reason"),
+                        "detail": fr.get("detail"),
+                        "errors": errs,
+                    }
+                    failures.append(rec)
+                    _bulk_line(f"  FAILED: {fr.get('reason')} {fr.get('detail', '')}")
+                    with log_path.open("a", encoding="utf-8") as lf:
+                        lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    if args.fail_fast:
+                        return 1
+                    continue
 
-            fr = frs[0] if frs else {}
-            if not fr.get("ok", True):
-                rec = {
-                    "file": rel,
-                    "phase": "extract",
-                    "reason": fr.get("reason"),
-                    "detail": fr.get("detail"),
-                    "errors": errs,
-                }
+                if errs:
+                    for e in errs:
+                        _bulk_line(f"  warning: {e}")
+
+                if args.skip_empty_rows and len(rows) == 0:
+                    rec = {"file": rel, "phase": "rows", "error": "zero rows"}
+                    failures.append(rec)
+                    _bulk_line("  WARNING: zero rows")
+                    with log_path.open("a", encoding="utf-8") as lf:
+                        lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                    if args.fail_fast:
+                        return 1
+                    continue
+
+                if len(rows) == 0:
+                    _bulk_line("  skip: zero rows (no .xlsx written)", file=sys.stdout)
+                    continue
+
+                if out_xlsx.is_file():
+                    ok_count += 1
+                    _bulk_line(f"  -> {out_xlsx}", file=sys.stdout)
+                else:
+                    _bulk_line(f"  WARNING: server did not write {out_xlsx.name}", file=sys.stdout)
+
+            except (URLError, RuntimeError, json.JSONDecodeError) as e:
+                rec = {"file": rel, "phase": "extract", "error": str(e)}
                 failures.append(rec)
-                _bulk_line(f"  FAILED: {fr.get('reason')} {fr.get('detail', '')}")
+                _bulk_line(f"  ERROR extract: {e}")
                 with log_path.open("a", encoding="utf-8") as lf:
                     lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 if args.fail_fast:
                     return 1
-                continue
-
-            if errs:
-                for e in errs:
-                    _bulk_line(f"  warning: {e}")
-
-            if args.skip_empty_rows and len(rows) == 0:
-                rec = {"file": rel, "phase": "rows", "error": "zero rows"}
+            except Exception as e:
+                rec = {"file": rel, "phase": "unexpected", "error": repr(e)}
                 failures.append(rec)
-                _bulk_line("  WARNING: zero rows")
+                _bulk_line(f"  ERROR unexpected: {e}")
                 with log_path.open("a", encoding="utf-8") as lf:
                     lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 if args.fail_fast:
                     return 1
-                continue
 
-            if len(rows) == 0:
-                _bulk_line("  skip: zero rows (no .xlsx written)", file=sys.stdout)
-                continue
-
-            def do_download() -> bytes:
-                return post_download(args.base_url, rows, args.timeout)
-
-            xlsx_bytes = call_with_retry(
-                "download",
-                do_download,
-                max_attempts=max_att,
-                enabled=retry_enabled,
-            )
-
-            out_xlsx.write_bytes(xlsx_bytes)
-            ok_count += 1
-            _bulk_line(f"  -> {out_xlsx}", file=sys.stdout)
-
-        except (URLError, RuntimeError, json.JSONDecodeError) as e:
-            rec = {"file": rel, "phase": "extract", "error": str(e)}
-            failures.append(rec)
-            _bulk_line(f"  ERROR extract: {e}")
-            with log_path.open("a", encoding="utf-8") as lf:
-                lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            if args.fail_fast:
-                return 1
-        except Exception as e:
-            rec = {"file": rel, "phase": "unexpected", "error": repr(e)}
-            failures.append(rec)
-            _bulk_line(f"  ERROR unexpected: {e}")
-            with log_path.open("a", encoding="utf-8") as lf:
-                lf.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            if args.fail_fast:
-                return 1
-
-    parts = [
-        f"wrote {ok_count} workbook(s)",
-        f"skipped {skip_count} existing",
-        f"failures logged {len(failures)}",
-    ]
-    _bulk_line(f"Done. {', '.join(parts)}.", file=sys.stdout)
-    if failures and args.strict_exit:
-        return 1
-    return 0
+        parts = [
+            f"wrote {ok_count} workbook(s)",
+            f"skipped {skip_count} existing",
+            f"failures logged {len(failures)}",
+        ]
+        _bulk_line(f"Done. {', '.join(parts)}.", file=sys.stdout)
+        if failures and args.strict_exit:
+            return 1
+        return 0
+    finally:
+        _post_batch_done(args.base_url, args.timeout)
 
 
 if __name__ == "__main__":
