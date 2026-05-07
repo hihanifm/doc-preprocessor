@@ -368,8 +368,8 @@ def _resolve_stream(document_scope: str, stream: bool | None) -> bool:
 
 
 def _sleep_backoff(attempt: int) -> None:
-    # attempt=0 -> 1s, attempt=1 -> 2s (2 exponential backoffs total)
-    time.sleep(2**attempt)
+    # attempt=0 -> 10s, attempt=1 -> 20s (2 exponential backoffs total)
+    time.sleep(10 * (2**attempt))
 
 
 def _is_retryable_llm_server_error(err: Exception) -> bool:
@@ -379,6 +379,7 @@ def _is_retryable_llm_server_error(err: Exception) -> bool:
     return any(
         tok in s
         for tok in (
+            "HTTP error 429",
             "HTTP error 500",
             "HTTP error 502",
             "HTTP error 503",
