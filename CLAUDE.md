@@ -42,7 +42,7 @@ make down-all           # stop both profiles
 
 Dev and prod profiles can run simultaneously. Bind-mount (`.:/app`) means Python source edits are live in dev without a rebuild.
 
-**Bulk folder extraction (no UI):** see `[scripts/BULK_EXTRACT.md](scripts/BULK_EXTRACT.md)` and `scripts/folder_batch_extract.py` — processes a source directory into one `.xlsx` per document via `POST /extract` and `POST /download` (default: skip inputs whose output `.xlsx` already exists; transient HTTP retries with backoff; **LLM mode** streams section progress on stderr like the UI unless `--no-llm-progress-stream`).
+**Bulk folder extraction (no UI):** see `[scripts/BULK_EXTRACT.md](scripts/BULK_EXTRACT.md)` and `scripts/folder_batch_extract.py` — processes a source directory into one `.xlsx` per document, written directly to the output folder by the server (no client download step). Uses `/batch/start` + `/batch/done` lifecycle; `POST /extract` with `output_path` triggers a server-side atomic xlsx write on completion. Flags: `--cancel` stops a running batch, `--reconnect` takes over an active one; default: skip inputs whose output `.xlsx` already exists; transient HTTP retries with backoff. **LLM mode** streams section progress on stderr unless `--no-llm-progress-stream`.
 
 **LLM section mode:** if one section’s model call fails, extraction **continues** with remaining sections and keeps rows from successful sections (failures are listed in `**errors`**). The Test case extractor UI retries transient `**/extract**` failures with the same backoff policy as the batch script.
 
@@ -89,7 +89,7 @@ This repository does **not** check in a virtualenv (`.venv/` is gitignored). **D
   - Unix/macOS: `source .venv/bin/activate && pip install -r requirements.txt`
   - Windows: run `.venv\Scripts\activate` then `pip install -r requirements.txt`
 
-Prefer `**./start.sh`** (Unix) or `**start.bat**` / `**start_lan.bat**` (Windows) when you just need to run the app — they create `.venv` when needed and install deps first.
+Prefer `**start.bat**` / `**start_lan.bat**` (Windows) when you just need to run the app — they create `.venv` when needed and install deps first. On Unix/macOS use `make run` or the manual steps above.
 
 ## Tests
 
@@ -112,7 +112,7 @@ The document pipeline is linear — upload → normalize to plain text → pick 
 2. `**readers/pdf_reader.py**` — converts digital `.pdf` to plain text with `**pdfplumber**`: page text and **detected tables** are interleaved top-to-bottom; tables use the same `|` cell spacing style as Word output.
 3. `**readers/document_reader.py`** — `read_document(path)` dispatches on extension (`.docx` vs `.pdf`).
 4. `**extractors/**` — template modules implement `matches(doc_text)` and `extract(doc_text, filename)`; the first match wins (`extractors/__init__.py`).
-5. `**llm_document_filter.py**` — strips boilerplate heading sections (TOC, introduction, revision history, etc.) from normalized doc text before it is sent to the LLM, reducing token usage and noise.
+5. `**llm_document_filter.py**` — strips boilerplate heading sections (TOC, introduction, revision history, appendices, etc.) **and TOC dotted-leader lines** (e.g. `3.1.2 Title ........ 5`) from normalized doc text before LLM extraction, reducing token usage and noise.
 6. `**llm_extractor.py**` — optional OpenAI-compatible `chat/completions` path; strict JSON `test_cases` → normalized row dicts.
 7. `**app.py**` — Flask routes include:
   - `GET /` — UI
@@ -121,21 +121,21 @@ The document pipeline is linear — upload → normalize to plain text → pick 
   - `POST /preview-doc` — single `.docx` or `.pdf` → parsed text preview
   - `POST /llm-models` — JSON `{ llm_base_url, llm_api_key? }` → `{ models: [...] }` via OpenAI-compatible `GET …/models` or Ollama `GET …/api/tags` (server-side; credentials not persisted)
   - `POST /support-upload` — saves one `.docx`/`.pdf` into `SUPPORT_UPLOAD_DIR` with a unique filename; returns `{ ok, reference }`
-  - `POST /extract` — multipart uploads → spawns background worker, returns `{ job_id }` immediately; form field `mode=template` (default) or `mode=llm` with `llm_base_url`, `llm_api_key`, `llm_model`; optional `llm_stream` (`1`|`0`) forces SSE on/off
+  - `POST /extract` — multipart uploads → spawns background worker, returns `{ job_id }` immediately; form field `mode=template` (default) or `mode=llm` with `llm_base_url`, `llm_api_key`, `llm_model`; optional `llm_stream` (`1`|`0`) forces SSE on/off; optional `output_path` — if set, worker atomically writes result `.xlsx` to this server-side path on completion (used by batch script)
   - `GET /extract/<job_id>/stream` — NDJSON SSE stream for a running or completed job; replays all events from index 0 on reconnect (idempotent)
   - `POST /extract/<job_id>/cancel` — cancels a running job
+  - `POST /batch/start` — claim the global batch lock; returns 409 if another batch is running (pass `reconnect=1` to take over)
+  - `POST /batch/done` — release the batch lock on successful completion
+  - `POST /batch/cancel` — cancel the active batch and release the lock
+  - `GET /batch/status` — returns `{ active: bool, output_dir? }`
   - `POST /download` — `{rows}` JSON → `.xlsx`
   - `GET /samples/<path>` — static sample files
-  - `POST /excel/sheet-info` — sheet names + headers for an uploaded `.xlsx`
-  - `POST /excel/sample-rows` — sample rows for a sheet
-  - `POST /excel/peek-column` — distinct values for a column (capped)
-  - `POST /excel/download-filtered` — filter columns/rows and download result
-  - `POST /excel/merge` — stack two sheets by matching headers
-  - `POST /excel/join` — LEFT JOIN two sheets on a key column (`excel_filter.join_xlsx_to_bytes`)
-8. `**excel_filter.py**` — pure functions `filter_xlsx_to_bytes`, `merge_xlsx_to_bytes`, `join_xlsx_to_bytes` used by the Excel shrinker routes.
+8. **Excel shrinker / merger / joiner** — fully client-side via **SheetJS** (`xlsx.full.min.js`, loaded from cdnjs). All filter, merge, and join operations run in the browser; no server routes or `excel_filter.py`. Files are parsed once and cached in a `WeakMap` per `File` object.
 9. `**exporter.py`** — builds the workbook from row dicts (`openpyxl`). Columns include `**procedure_steps**` and `**expected_results**`. Template-based rows may omit them until extractors are updated.
 
 **Async job registry:** `_JOBS` is an in-memory dict keyed by `job_id`. Each entry holds an `events` list, a `threading.Condition`, and `done`/`cancelled` flags. `_job_iter` long-polls with `condition.wait_for` so `GET /extract/<job_id>/stream` can reconnect and replay from any index without data loss. Jobs are never evicted from memory (process-lifetime only).
+
+**Batch lock:** `_ACTIVE_BATCH` (dict or None) + `_BATCH_LOCK` (threading.Lock) enforce one batch at a time server-side. `/batch/start` sets it; `/batch/done` and `/batch/cancel` clear it.
 
 **`config.json`** at the project root is a local developer shortcut for LLM connection settings — it is not loaded by the app and should not be committed with real credentials.
 

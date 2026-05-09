@@ -31,6 +31,15 @@
 
     h1 { font-size: 1.65rem; font-weight: 700; margin-bottom: 6px; letter-spacing: -0.02em; }
     .subtitle { color: var(--muted); font-size: 0.92rem; margin-bottom: 22px; line-height: 1.45; }
+    .local-badge {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      background: #dcfce7; color: #15803d;
+      border: 1px solid #86efac;
+      font-size: 0.78rem; font-weight: 650; letter-spacing: 0.01em;
+      padding: 0.15rem 0.55rem; border-radius: 999px;
+      margin-right: 0.55rem; vertical-align: middle;
+      white-space: nowrap;
+    }
 
     /* Tabs */
     .tab-bar {
@@ -1142,14 +1151,209 @@
     const PREVIEW_MAX = 200;
     const SUBTITLE_CONVERTER =
       'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';
+    const _LOCAL_BADGE = '<span class="local-badge">⚡ 100 % local</span>';
     const SUBTITLE_EXCEL =
-      'Spreadsheet shrinker: load a big .xlsx, peek columns without hammering the browser, filter by column, download a lighter workbook.';
+      _LOCAL_BADGE + 'Spreadsheet shrinker: your file never leaves the browser. Filter by column, download a lighter workbook.';
     const SUBTITLE_MERGE_ROWS =
-      'Row merger: stack multiple workbooks that share the same columns — one tall sheet.';
+      _LOCAL_BADGE + 'Row merger: files never leave the browser. Stack multiple workbooks that share the same columns into one tall sheet.';
     const SUBTITLE_MERGE_COLS =
-      'Column merger: LEFT JOIN — every row from the left workbook stays; add columns from the right where keys match.';
+      _LOCAL_BADGE + 'Column merger: files never leave the browser. LEFT JOIN — every row from the left workbook stays; add columns from the right where keys match.';
     const SUBTITLE_EDITOR =
-      'Spreadsheet editor: open a workbook in your browser only — paginate, edit cells, mark rows to remove, download a new .xlsx.';
+      _LOCAL_BADGE + 'Spreadsheet editor: your file never leaves the browser — paginate, edit cells, mark rows to remove, download a new .xlsx.';
+
+    // ── SheetJS local helpers (shrinker / merger / joiner — no server round-trip) ──
+
+    const _xlWbCache = new WeakMap();
+    async function xlReadWb(file) {
+      if (_xlWbCache.has(file)) return _xlWbCache.get(file);
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab, { cellDates: true });
+      _xlWbCache.set(file, wb);
+      return wb;
+    }
+
+    function xlNormCell(val) {
+      if (val === null || val === undefined) return '';
+      return String(val).trim();
+    }
+
+    function xlHeaders(aoa) {
+      return (aoa[0] || []).map((h, i) => { const s = xlNormCell(h); return s || `Column${i + 1}`; });
+    }
+
+    function xlSheetInfo(wb, si) {
+      const names = wb.SheetNames;
+      const ws = wb.Sheets[names[si] || names[0]];
+      if (!ws) return { sheetNames: names, headers: [], rowCount: 0 };
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      return { sheetNames: names, headers: xlHeaders(aoa), rowCount: Math.max(0, aoa.length - 1) };
+    }
+
+    function xlSampleRows(wb, si, limit) {
+      const names = wb.SheetNames;
+      const ws = wb.Sheets[names[si] || names[0]];
+      if (!ws) return { headers: [], rows: [] };
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      const headers = xlHeaders(aoa);
+      const rows = aoa.slice(1, 1 + limit).map(r => {
+        const out = r.slice(0, headers.length).map(v => (v === null || v === undefined) ? '' : v);
+        while (out.length < headers.length) out.push('');
+        return out;
+      });
+      return { headers, rows };
+    }
+
+    function xlPeekDistinct(wb, si, column, maxValues, maxScan) {
+      const names = wb.SheetNames;
+      const ws = wb.Sheets[names[si] || names[0]];
+      if (!ws) return { values: [], truncated: false, scannedRows: 0 };
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      const headers = xlHeaders(aoa);
+      const colIdx = headers.indexOf(column);
+      if (colIdx < 0) throw new Error(`Column not found: ${column}`);
+      const seen = new Set(); const values = [];
+      let scannedRows = 0, truncated = false;
+      for (let i = 1; i < aoa.length; i++) {
+        if (++scannedRows > maxScan) { truncated = true; break; }
+        const cell = xlNormCell(aoa[i][colIdx]);
+        if (!cell || seen.has(cell)) continue;
+        seen.add(cell); values.push(cell);
+        if (values.length >= maxValues) { truncated = true; break; }
+      }
+      return { values, truncated, scannedRows };
+    }
+
+    function xlRowMatches(cell, mode, needle, rx) {
+      if (mode === 'regex') return rx ? rx.test(cell) : true;
+      if (!needle.trim()) return true;
+      const c = cell.toLowerCase(), n = needle.toLowerCase();
+      if (mode === 'contains') return c.includes(n);
+      if (mode === 'equals') return c === n;
+      if (mode === 'not_contains') return !c.includes(n);
+      if (mode === 'starts_with') return c.startsWith(n);
+      return true;
+    }
+
+    function xlFilterToBlob(wb, si, filters) {
+      const names = wb.SheetNames;
+      const ws = wb.Sheets[names[si] || names[0]];
+      if (!ws) throw new Error('Sheet not found.');
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+      const headers = xlHeaders(aoa);
+      const resolved = filters.map(f => {
+        const colIdx = headers.indexOf(f.column);
+        if (colIdx < 0) throw new Error(`Column not found: ${f.column}`);
+        let rx = null;
+        if (f.mode === 'regex' && (f.value || '').trim()) {
+          try { rx = new RegExp(f.value); } catch(e) { throw new Error(`Invalid regex: ${e.message}`); }
+        }
+        return { colIdx, mode: f.mode, needle: f.value || '', rx };
+      });
+      const kept = [headers];
+      for (let i = 1; i < aoa.length; i++) {
+        const row = aoa[i];
+        let pass = true;
+        for (const { colIdx, mode, needle, rx } of resolved) {
+          if (!xlRowMatches(xlNormCell(row[colIdx]), mode, needle, rx)) { pass = false; break; }
+        }
+        if (pass) {
+          const out = row.slice(0, headers.length).map(v => (v === null || v === undefined) ? '' : v);
+          while (out.length < headers.length) out.push('');
+          kept.push(out);
+        }
+      }
+      const outWs = XLSX.utils.aoa_to_sheet(kept);
+      const outWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(outWb, outWs, 'Filtered');
+      return new Blob([XLSX.write(outWb, { bookType: 'xlsx', type: 'array' })],
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    }
+
+    function xlMergeToBlob(wbs, filenames, sheetIndices, addSource) {
+      let refHeaders = null;
+      const allRows = [];
+      for (let i = 0; i < wbs.length; i++) {
+        const names = wbs[i].SheetNames;
+        const si = sheetIndices[i];
+        const ws = wbs[i].Sheets[names[si] || names[0]];
+        if (!ws) throw new Error(`'${filenames[i]}': sheet index ${si} out of range.`);
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+        const headers = xlHeaders(aoa);
+        if (refHeaders === null) {
+          refHeaders = headers;
+        } else if (JSON.stringify(headers) !== JSON.stringify(refHeaders)) {
+          throw new Error(`'${filenames[i]}' columns don't match the first file.`);
+        }
+        for (let j = 1; j < aoa.length; j++) {
+          const row = aoa[j].slice(0, refHeaders.length).map(v => (v === null || v === undefined) ? '' : v);
+          while (row.length < refHeaders.length) row.push('');
+          if (addSource) row.push(filenames[i]);
+          allRows.push(row);
+        }
+      }
+      if (!refHeaders) throw new Error('No data found in uploaded files.');
+      const outHeaders = addSource ? [...refHeaders, 'Source file'] : refHeaders;
+      const outWs = XLSX.utils.aoa_to_sheet([outHeaders, ...allRows]);
+      const outWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(outWb, outWs, 'Merged');
+      return new Blob([XLSX.write(outWb, { bookType: 'xlsx', type: 'array' })],
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    }
+
+    function xlUniqueFromRight(base, taken) {
+      let c = `${base} (from right)`;
+      if (!taken.has(c)) return c;
+      let n = 2;
+      for (;;) { c = `${base} (from right) [${n++}]`; if (!taken.has(c)) return c; }
+    }
+
+    function xlJoinToBlob(targetWb, sourceWb, tsi, ssi, keyLeft, keyRight, columnsToCopy, overlap) {
+      const srcNames = sourceWb.SheetNames;
+      const srcWs = sourceWb.Sheets[srcNames[ssi] || srcNames[0]];
+      if (!srcWs) throw new Error('Source sheet not found.');
+      const srcAoa = XLSX.utils.sheet_to_json(srcWs, { header: 1, defval: null });
+      const srcHeaders = xlHeaders(srcAoa);
+      const srcKeyIdx = srcHeaders.indexOf(keyRight);
+      if (srcKeyIdx < 0) throw new Error(`Right (source) key column '${keyRight}' not found.`);
+      const lookup = new Map();
+      for (let i = 1; i < srcAoa.length; i++) {
+        const k = xlNormCell(srcAoa[i][srcKeyIdx]);
+        if (k && !lookup.has(k)) {
+          const obj = {}; srcHeaders.forEach((h, idx) => { obj[h] = xlNormCell(srcAoa[i][idx]); });
+          lookup.set(k, obj);
+        }
+      }
+      const tgtNames = targetWb.SheetNames;
+      const tgtWs = targetWb.Sheets[tgtNames[tsi] || tgtNames[0]];
+      if (!tgtWs) throw new Error('Target sheet not found.');
+      const tgtAoa = XLSX.utils.sheet_to_json(tgtWs, { header: 1, defval: null });
+      const tgtHeaders = xlHeaders(tgtAoa);
+      if (!tgtHeaders.includes(keyLeft)) throw new Error(`Left (target) key column '${keyLeft}' not found.`);
+      const taken = new Set(tgtHeaders);
+      const outHeaders = [...tgtHeaders];
+      const colDest = {};
+      for (const c of columnsToCopy) {
+        if (tgtHeaders.includes(c)) {
+          if (overlap === 'replace') { colDest[c] = c; }
+          else { const nm = xlUniqueFromRight(c, taken); colDest[c] = nm; outHeaders.push(nm); taken.add(nm); }
+        } else {
+          colDest[c] = c;
+          if (!taken.has(c)) { outHeaders.push(c); taken.add(c); }
+        }
+      }
+      const outRows = [outHeaders];
+      for (let i = 1; i < tgtAoa.length; i++) {
+        const d = {}; tgtHeaders.forEach((h, idx) => { d[h] = xlNormCell(tgtAoa[i][idx]); });
+        const srcRow = lookup.get(d[keyLeft] || '') || {};
+        for (const col of columnsToCopy) d[colDest[col]] = srcRow[col] || '';
+        outRows.push(outHeaders.map(h => d[h] !== undefined ? d[h] : ''));
+      }
+      const outWs = XLSX.utils.aoa_to_sheet(outRows);
+      const outWb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(outWb, outWs, 'Joined');
+      return new Blob([XLSX.write(outWb, { bookType: 'xlsx', type: 'array' })],
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    }
 
     /** URL fragment (#…) for bookmarking each main tab; click updates the address bar. */
     const TAB_HASH_FRAGMENT = {
@@ -1203,10 +1407,10 @@
       document.getElementById('panel-merge-rows').hidden = tab !== 'merge-rows';
       document.getElementById('panel-merge-columns').hidden = tab !== 'merge-cols';
       document.getElementById('panel-editor').hidden = tab !== 'editor';
-      if (tab === 'excel') pageSubtitle.textContent = SUBTITLE_EXCEL;
-      else if (tab === 'merge-rows') pageSubtitle.textContent = SUBTITLE_MERGE_ROWS;
-      else if (tab === 'merge-cols') pageSubtitle.textContent = SUBTITLE_MERGE_COLS;
-      else if (tab === 'editor') pageSubtitle.textContent = SUBTITLE_EDITOR;
+      if (tab === 'excel') pageSubtitle.innerHTML = SUBTITLE_EXCEL;
+      else if (tab === 'merge-rows') pageSubtitle.innerHTML = SUBTITLE_MERGE_ROWS;
+      else if (tab === 'merge-cols') pageSubtitle.innerHTML = SUBTITLE_MERGE_COLS;
+      else if (tab === 'editor') pageSubtitle.innerHTML = SUBTITLE_EDITOR;
       else pageSubtitle.textContent = SUBTITLE_CONVERTER;
     }
 
@@ -1503,6 +1707,7 @@
     const excelFileDisplay = document.getElementById('excel-file-display');
     let excelFile = null;
     let excelShrinkerColumns = [];
+    let excelParsedWb = null;
 
     function syncExcelFilterRowPlaceholder(row) {
       const modeSel = row.querySelector('.excel-filter-mode');
@@ -1654,14 +1859,11 @@
 
     async function loadExcelInfo(sheetIndex) {
       if (!excelFile) return;
-      const fd = new FormData();
-      fd.append('file', excelFile);
-      fd.append('sheet_index', String(sheetIndex));
-      const r = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
-      const d = await r.json();
-      if (d.error) throw new Error(d.error);
+      const wb = await xlReadWb(excelFile);
+      excelParsedWb = wb;
+      const info = xlSheetInfo(wb, sheetIndex);
       excelSheet.innerHTML = '';
-      d.sheet_names.forEach((name, idx) => {
+      info.sheetNames.forEach((name, idx) => {
         const opt = document.createElement('option');
         opt.value = String(idx);
         opt.textContent = name;
@@ -1670,17 +1872,17 @@
       excelSheet.style.display = 'inline-block';
       excelSheet.value = String(sheetIndex);
 
-      excelShrinkerColumns = d.columns.slice();
+      excelShrinkerColumns = info.headers.slice();
       refreshAllExcelFilterColumnSelects();
       syncAllExcelFilterRowPlaceholders();
       updateExcelFilterRemoveDisabled();
 
       excelMeta.style.display = 'block';
-      excelRowCount.textContent = `${d.row_count.toLocaleString()} data rows · ${d.columns.length} columns`;
-      excelDownloadBtn.disabled = d.columns.length === 0;
-      excelPeekBtn.disabled = d.columns.length === 0;
-      excelPreviewRowsBtn.disabled = d.columns.length === 0;
-      excelAddFilterBtn.disabled = d.columns.length === 0;
+      excelRowCount.textContent = `${info.rowCount.toLocaleString()} data rows · ${info.headers.length} columns`;
+      excelDownloadBtn.disabled = info.headers.length === 0;
+      excelPeekBtn.disabled = info.headers.length === 0;
+      excelPreviewRowsBtn.disabled = info.headers.length === 0;
+      excelAddFilterBtn.disabled = info.headers.length === 0;
       excelPeekOut.classList.remove('visible');
       excelPeekOut.innerHTML = '';
       excelRowsPreview.classList.remove('visible');
@@ -1689,6 +1891,7 @@
 
     excelFileInput.addEventListener('change', e => {
       excelFile = e.target.files[0] || null;
+      excelParsedWb = null;
       syncExcelFileLabel();
       excelAnalyzeBtn.disabled = !excelFile;
       excelDownloadBtn.disabled = true;
@@ -1706,22 +1909,12 @@
     });
 
     excelPreviewRowsBtn.addEventListener('click', async () => {
-      if (!excelFile) return;
+      if (!excelFile || !excelParsedWb) return;
       excelPreviewRowsBtn.disabled = true;
       try {
-        const fd = new FormData();
-        fd.append('file', excelFile);
-        fd.append('sheet_index', excelChosenSheetIndex());
-        fd.append('limit', '15');
-        const r = await fetch('/excel/sample-rows', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (d.error) throw new Error(d.error);
-        renderGridPreview(
-          excelRowsPreview,
-          d.columns,
-          d.rows,
-          `First ${d.rows.length} data row(s), all columns (preview only)`
-        );
+        const si = parseInt(excelChosenSheetIndex(), 10) || 0;
+        const { headers, rows } = xlSampleRows(excelParsedWb, si, 15);
+        renderGridPreview(excelRowsPreview, headers, rows, `First ${rows.length} data row(s), all columns (preview only)`);
       } catch (err) {
         setStatus(`Row preview: ${esc(err.message)}`, 'error');
       } finally {
@@ -1752,20 +1945,13 @@
 
     excelPeekBtn.addEventListener('click', async () => {
       const peekCol = peekColumnFromExcelFilters();
-      if (!excelFile || !peekCol) return;
+      if (!excelFile || !excelParsedWb || !peekCol) return;
       excelPeekBtn.disabled = true;
       try {
-        const fd = new FormData();
-        fd.append('file', excelFile);
-        fd.append('column', peekCol);
-        fd.append('sheet_index', excelChosenSheetIndex());
-        const r = await fetch('/excel/peek-column', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (d.error) throw new Error(d.error);
-        const meta =
-          `${d.values.length} distinct · scanned ${d.scanned_rows} row(s)` +
-          (d.truncated ? ' · truncated' : '');
-        renderDistinctTable(excelPeekOut, peekCol, d.values, d.scanned_rows, d.truncated, meta);
+        const si = parseInt(excelChosenSheetIndex(), 10) || 0;
+        const { values, truncated, scannedRows } = xlPeekDistinct(excelParsedWb, si, peekCol, 30, 20000);
+        const meta = `${values.length} distinct · scanned ${scannedRows} row(s)` + (truncated ? ' · truncated' : '');
+        renderDistinctTable(excelPeekOut, peekCol, values, scannedRows, truncated, meta);
       } catch (err) {
         setStatus(`Peek: ${esc(err.message)}`, 'error');
       } finally {
@@ -1774,7 +1960,7 @@
     });
 
     excelDownloadBtn.addEventListener('click', async () => {
-      if (!excelFile || !excelShrinkerColumns.length) return;
+      if (!excelFile || !excelParsedWb || !excelShrinkerColumns.length) return;
       const filters = buildExcelFiltersPayload();
       if (!filters.length || filters.some(f => !(f.column || '').trim())) {
         setStatus('Analyze the sheet, then choose a column for every filter row.', 'error');
@@ -1782,17 +1968,8 @@
       }
       excelDownloadBtn.disabled = true;
       try {
-        const fd = new FormData();
-        fd.append('file', excelFile);
-        fd.append('filters_json', JSON.stringify(filters));
-        fd.append('sheet_index', excelChosenSheetIndex());
-        const resp = await fetch('/excel/download-filtered', { method: 'POST', body: fd });
-        const ct = resp.headers.get('Content-Type') || '';
-        if (!resp.ok) {
-          const errBody = ct.includes('json') ? (await resp.json()).error : await resp.text();
-          throw new Error(typeof errBody === 'string' ? errBody : errBody || 'Download failed');
-        }
-        const blob = await resp.blob();
+        const si = parseInt(excelChosenSheetIndex(), 10) || 0;
+        const blob = xlFilterToBlob(excelParsedWb, si, filters);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -2760,14 +2937,13 @@
         try {
           const parts = await Promise.all(
             Array.from(pickedFiles).map(async (f, i) => {
-              const idx = selects[i].value;
-              const fd = new FormData();
-              fd.append('file', f);
-              fd.append('sheet_index', idx);
-              const res = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
-              const d = await res.json();
-              if (d.error) return { name: f.name, err: d.error };
-              return { name: f.name, cols: d.columns };
+              try {
+                const wb = await xlReadWb(f);
+                const { headers } = xlSheetInfo(wb, parseInt(selects[i].value, 10) || 0);
+                return { name: f.name, cols: headers };
+              } catch (e) {
+                return { name: f.name, err: e.message };
+              }
             })
           );
           let html =
@@ -2836,13 +3012,9 @@
             row.appendChild(lab);
             mergeSheetHost.appendChild(row);
 
-            const fd = new FormData();
-            fd.append('file', file);
-            fd.append('sheet_index', '0');
-            const res = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
-            const d = await res.json();
-            if (d.error) throw new Error(`${file.name}: ${d.error}`);
-            d.sheet_names.forEach((sheetName, idx) => {
+            const wb = await xlReadWb(file);
+            const { sheetNames } = xlSheetInfo(wb, 0);
+            sheetNames.forEach((sheetName, idx) => {
               const opt = document.createElement('option');
               opt.value = String(idx);
               opt.textContent = sheetName;
@@ -2892,26 +3064,16 @@
         mergeBtn.disabled = true;
         mergeBtn.textContent = 'Merging…';
         try {
-          const fd = new FormData();
-          Array.from(pickedFiles).forEach(f => fd.append('files', f));
-          if (addSource.checked) fd.append('add_source', '1');
-          const sis = Array.from(mergeSheetHost.querySelectorAll('.merge-file-sheet-select')).map(s =>
-            parseInt(s.value, 10));
-          fd.append('sheet_indices_json', JSON.stringify(sis));
-          const res = await fetch('/excel/merge', { method: 'POST', body: fd });
-          if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'merged.xlsx';
-            a.click();
-            URL.revokeObjectURL(url);
-          } else {
-            const data = await res.json().catch(() => ({ error: 'Unexpected server error.' }));
-            errorBox.innerHTML = `<div class="error-item">${esc(data.error || 'Merge failed.')}</div>`;
-            errorBox.style.display = '';
-          }
+          const files = Array.from(pickedFiles);
+          const sis = Array.from(mergeSheetHost.querySelectorAll('.merge-file-sheet-select')).map(s => parseInt(s.value, 10));
+          const wbs = await Promise.all(files.map(xlReadWb));
+          const blob = xlMergeToBlob(wbs, files.map(f => f.name), sis, addSource.checked);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'merged.xlsx';
+          a.click();
+          URL.revokeObjectURL(url);
         } catch (err) {
           errorBox.innerHTML = `<div class="error-item">${esc(err.message)}</div>`;
           errorBox.style.display = '';
@@ -2938,13 +3100,9 @@
       let targetFile = null, sourceFile = null, sourceCols = [];
 
       async function fetchSheetInfo(file, sheetIndex) {
-        const fd = new FormData();
-        fd.append('file', file);
-        fd.append('sheet_index', String(sheetIndex));
-        const r = await fetch('/excel/sheet-info', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (d.error) throw new Error(d.error);
-        return { columns: d.columns, sheet_names: d.sheet_names };
+        const wb = await xlReadWb(file);
+        const { headers, sheetNames } = xlSheetInfo(wb, sheetIndex);
+        return { columns: headers, sheet_names: sheetNames };
       }
 
       function fillSheetOpts(sel, names) {
@@ -3034,30 +3192,23 @@
         downloadBtn.disabled = true;
         downloadBtn.textContent = 'Joining…';
         try {
-          const fd = new FormData();
-          fd.append('target', targetFile);
-          fd.append('source', sourceFile);
-          fd.append('key_col_left', keySelectLeft.value);
-          fd.append('key_col_right', keySelectRight.value);
-          fd.append('target_sheet_index', targetSheetSel.value);
-          fd.append('source_sheet_index', sourceSheetSel.value);
+          const tgtWb = await xlReadWb(targetFile);
+          const srcWb = await xlReadWb(sourceFile);
           const overlapEl = document.querySelector('input[name="join-overlap"]:checked');
-          fd.append('join_overlap', (overlapEl && overlapEl.value) || 'replace');
-          colList.querySelectorAll('.join-col-cb:checked').forEach(cb => fd.append('columns', cb.value));
-          const res = await fetch('/excel/join', { method: 'POST', body: fd });
-          if (res.ok && res.headers.get('Content-Type').includes('spreadsheetml')) {
-            const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = (targetFile.name.replace(/\.[^.]+$/, '') || 'enriched') + '_enriched.xlsx';
-            a.click();
-            URL.revokeObjectURL(url);
-          } else {
-            const data = await res.json().catch(() => ({ error: 'Unexpected server error.' }));
-            errorBox.innerHTML = `<div class="error-item">${esc(data.error || 'Join failed.')}</div>`;
-            errorBox.style.display = '';
-          }
+          const cols = Array.from(colList.querySelectorAll('.join-col-cb:checked')).map(cb => cb.value);
+          const blob = xlJoinToBlob(
+            tgtWb, srcWb,
+            parseInt(targetSheetSel.value, 10) || 0,
+            parseInt(sourceSheetSel.value, 10) || 0,
+            keySelectLeft.value, keySelectRight.value,
+            cols, (overlapEl && overlapEl.value) || 'replace'
+          );
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = (targetFile.name.replace(/\.[^.]+$/, '') || 'enriched') + '_enriched.xlsx';
+          a.click();
+          URL.revokeObjectURL(url);
         } catch (err) {
           errorBox.innerHTML = `<div class="error-item">${esc(err.message)}</div>`;
           errorBox.style.display = '';
