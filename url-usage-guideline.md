@@ -69,13 +69,15 @@ location /myapp/ {
 
 ## Quick reference
 
-| Scenario | Rule |
-|---|---|
-| Plain `fetch` / HTTP client calls | Document-relative paths — no leading `/` |
-| JS router navigation | Set `basename` / `base` once in router config |
+
+| Scenario                             | Rule                                             |
+| ------------------------------------ | ------------------------------------------------ |
+| Plain `fetch` / HTTP client calls    | Document-relative paths — no leading `/`         |
+| JS router navigation                 | Set `basename` / `base` once in router config    |
 | Asset URLs (`img`, `script`, `link`) | Relative paths, or set `<base href>` in `<head>` |
-| Centralised client (axios, ky, etc.) | Set `baseURL` at construction time |
-| External API calls | Fully absolute — no change needed |
+| Centralised client (axios, ky, etc.) | Set `baseURL` at construction time               |
+| External API calls                   | Fully absolute — no change needed                |
+
 
 ---
 
