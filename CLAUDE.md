@@ -130,7 +130,7 @@ The document pipeline is linear — upload → normalize to plain text → pick 
   - `GET /batch/status` — returns `{ active: bool, output_dir? }`
   - `POST /download` — `{rows}` JSON → `.xlsx`
   - `GET /samples/<path>` — static sample files
-8. **Excel shrinker / merger / joiner** — fully client-side via **SheetJS** (`xlsx.full.min.js`, loaded from cdnjs). All filter, merge, and join operations run in the browser; no server routes or `excel_filter.py`. Files are parsed once and cached in a `WeakMap` per `File` object.
+8. **Excel shrinker / merger / joiner / editor** — all fully client-side via **SheetJS** (`xlsx.full.min.js`, loaded from cdnjs). Filter, merge, LEFT JOIN, and cell editing all run in the browser; no server routes involved. Files are parsed once and cached in a `WeakMap` per `File` object.
 9. `**exporter.py`** — builds the workbook from row dicts (`openpyxl`). Columns include `**procedure_steps**` and `**expected_results**`. Template-based rows may omit them until extractors are updated.
 
 **Async job registry:** `_JOBS` is an in-memory dict keyed by `job_id`. Each entry holds an `events` list, a `threading.Condition`, and `done`/`cancelled` flags. `_job_iter` long-polls with `condition.wait_for` so `GET /extract/<job_id>/stream` can reconnect and replay from any index without data loss. Jobs are never evicted from memory (process-lifetime only).
@@ -139,4 +139,4 @@ The document pipeline is linear — upload → normalize to plain text → pick 
 
 **`config.json`** at the project root is a local developer shortcut for LLM connection settings — it is not loaded by the app and should not be committed with real credentials.
 
-The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step.
+The frontend (`templates/index.html`) is a single self-contained HTML file with vanilla JS — no build step. All `fetch()` calls use **document-relative URLs** (no leading `/`) so the app works behind a path-prefix reverse proxy without any configuration — the proxy strips its prefix and the browser resolves fetch paths relative to the current page URL automatically.
