@@ -1575,7 +1575,7 @@
       btn.disabled = true;
       setLlmModelsHint('Fetching model list…', '');
       try {
-        const r = await fetch('/llm-models', {
+        const r = await fetch('llm-models', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({
@@ -2130,7 +2130,7 @@
       const jobId = activeExtractJobId || localStorage.getItem(EXTRACT_JOB_KEY);
       if (jobId) {
         try {
-          await fetch(`/extract/${jobId}/cancel`, { method: 'POST' });
+          await fetch(`extract/${jobId}/cancel`, { method: 'POST' });
         } catch (_) {}
       }
       try { localStorage.removeItem(EXTRACT_JOB_KEY); } catch (_) {}
@@ -2345,7 +2345,7 @@
     sampleBtn.addEventListener('click', async () => {
       sampleBtn.disabled = true; sampleBtn.textContent = 'Loading…';
       try {
-        const resp = await fetch('/samples/sample_test_plan.docx');
+        const resp = await fetch('samples/sample_test_plan.docx');
         if (!resp.ok) throw new Error('Could not fetch sample');
         const blob = await resp.blob();
         addFiles([new File([blob], 'sample_test_plan.docx', { type: blob.type })]);
@@ -2359,7 +2359,7 @@
     samplePdfBtn.addEventListener('click', async () => {
       samplePdfBtn.disabled = true; samplePdfBtn.textContent = 'Loading…';
       try {
-        const resp = await fetch('/samples/sample_test_plan.pdf');
+        const resp = await fetch('samples/sample_test_plan.pdf');
         if (!resp.ok) throw new Error('Could not fetch PDF sample');
         const blob = await resp.blob();
         addFiles([new File([blob], 'sample_test_plan.pdf', { type: blob.type || 'application/pdf' })]);
@@ -2377,7 +2377,7 @@
       const form = new FormData();
       form.append('file', selectedFiles[0]);
       try {
-        const r = await fetch('/preview-doc', { method: 'POST', body: form });
+        const r = await fetch('preview-doc', { method: 'POST', body: form });
         const d = await r.json();
         if (d.error) throw new Error(d.error);
         const lines = d.document_text.split('\n');
@@ -2430,7 +2430,7 @@
 
       try {
         const postResp = await fetchExtractWithRetry(
-          '/extract',
+          'extract',
           { method: 'POST', body: form, signal: activeExtractController.signal },
           10
         );
@@ -2441,7 +2441,7 @@
         const { job_id } = await postResp.json();
         localStorage.setItem(EXTRACT_JOB_KEY, job_id);
         activeExtractJobId = job_id;
-        const streamResp = await fetch(`/extract/${job_id}/stream`, { signal: activeExtractController.signal });
+        const streamResp = await fetch(`extract/${job_id}/stream`, { signal: activeExtractController.signal });
         if (!streamResp.ok) throw new Error('Stream unavailable');
         const data = await readNdjsonExtract(streamResp, startedAt, selectedFiles.length);
 
@@ -2592,7 +2592,7 @@
       }
       downloadBtn.disabled = true;
       try {
-        const resp = await fetch('/download', {
+        const resp = await fetch('download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rows: extractedRows }),
@@ -3226,7 +3226,7 @@
       activeExtractController = new AbortController();
       activeExtractJobId = jobId;
       cancelExtractBtn.disabled = false;
-      const streamResp = await fetch(`/extract/${jobId}/stream`, { signal: activeExtractController.signal }).catch(() => null);
+      const streamResp = await fetch(`extract/${jobId}/stream`, { signal: activeExtractController.signal }).catch(() => null);
       if (!streamResp || !streamResp.ok) {
         localStorage.removeItem(EXTRACT_JOB_KEY);
         cancelExtractBtn.disabled = true;
