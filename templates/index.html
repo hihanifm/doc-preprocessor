@@ -1056,6 +1056,7 @@
 
           <div class="btn-row" style="margin-bottom:0;">
             <button type="button" class="btn btn--primary" id="watermark-apply-btn" disabled>Apply &amp; Download</button>
+            <button type="button" class="btn btn--danger" id="watermark-remove-btn" disabled>Remove Watermark</button>
           </div>
           <p id="watermark-status" aria-live="polite"></p>
         </div>
@@ -3436,6 +3437,7 @@
       const wmFontSize = document.getElementById('watermark-font-size');
       const wmTile = document.getElementById('watermark-tile');
       const wmApplyBtn = document.getElementById('watermark-apply-btn');
+      const wmRemoveBtn = document.getElementById('watermark-remove-btn');
       const wmStatus = document.getElementById('watermark-status');
 
       const DOCX_WATERMARK_START = '<!--docs-garage-watermark:start-->';
@@ -3453,6 +3455,7 @@
       function syncWatermarkUi() {
         wmOpacityValue.textContent = `${parseInt(wmOpacity.value, 10) || 30}%`;
         wmApplyBtn.disabled = busy || !pickedFile || !wmText.value.trim();
+        wmRemoveBtn.disabled = busy || !pickedFile;
       }
 
       function normalizeHexColor(raw) {
@@ -3812,6 +3815,29 @@
         });
       }
 
+      async function removeWatermarkDocx(arrayBuffer) {
+        const { PizZip } = await ensureWatermarkLibs();
+        const zip = new PizZip(new Uint8Array(arrayBuffer));
+        let found = false;
+        Object.keys(zip.files).forEach(name => {
+          if (!/^word\/header\d*\.xml$/i.test(name)) return;
+          const entry = zip.file(name);
+          if (!entry) return;
+          const original = entry.asText();
+          const cleaned = original.replace(DOCX_WATERMARK_RX, '');
+          if (cleaned !== original) {
+            found = true;
+            zip.file(name, cleaned);
+          }
+        });
+        if (!found) return null;
+        return zip.generate({
+          type: 'blob',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          compression: 'DEFLATE',
+        });
+      }
+
       function attachWatermarkFile(file) {
         if (!file || !/\.(pdf|docx)$/i.test(file.name)) {
           setWatermarkStatus('Choose a .pdf or .docx file.', 'error');
@@ -3894,6 +3920,41 @@
           setWatermarkStatus(`Downloaded ${downloadName}.`, 'ok');
         } catch (err) {
           setWatermarkStatus(`Watermark error: ${err.message || err}`, 'error');
+        } finally {
+          busy = false;
+          syncWatermarkUi();
+        }
+      });
+
+      wmRemoveBtn.addEventListener('click', async () => {
+        const file = pickedFile;
+        if (!file) {
+          setWatermarkStatus('Choose a file first.', 'error');
+          return;
+        }
+        if (/\.pdf$/i.test(file.name)) {
+          setWatermarkStatus('PDF watermarks are drawn into the page content stream and cannot be removed in the browser.', 'warning');
+          return;
+        }
+        if (!/\.docx$/i.test(file.name)) {
+          setWatermarkStatus('Only .pdf and .docx files are supported on this tab.', 'error');
+          return;
+        }
+        busy = true;
+        syncWatermarkUi();
+        setWatermarkStatus('Removing watermark…', 'warning');
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const blob = await removeWatermarkDocx(arrayBuffer);
+          if (!blob) {
+            setWatermarkStatus('No Docs Garage watermark found in this file.', 'warning');
+            return;
+          }
+          const downloadName = String(file.name).replace(/\.[^.]+$/, '') + '_no-watermark.docx';
+          triggerBlobDownload(blob, downloadName);
+          setWatermarkStatus(`Downloaded ${downloadName}.`, 'ok');
+        } catch (err) {
+          setWatermarkStatus(`Remove error: ${err.message || err}`, 'error');
         } finally {
           busy = false;
           syncWatermarkUi();
