@@ -675,6 +675,76 @@
     #llm-models-hint.llm-models-hint--err { color: #b91c1c; }
     #llm-models-hint.llm-models-hint--ok { color: #15803d; }
 
+    /* Watermark tab (client-side only) */
+    #watermark-tool {
+      background: var(--surface);
+      border: 1px solid #e2e8f0;
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      margin-bottom: 12px;
+      margin-top: 4px;
+      box-shadow: var(--shadow);
+    }
+    #watermark-controls {
+      margin-top: 14px;
+    }
+    #watermark-controls .filter-row label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    #watermark-controls input[type="text"],
+    #watermark-controls input[type="number"],
+    #watermark-controls select {
+      min-width: 180px;
+      max-width: min(320px, 100%);
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      font-size: 0.85rem;
+      background: #fff;
+      font-family: inherit;
+    }
+    #watermark-controls input[type="text"] {
+      min-width: min(420px, 100%);
+      max-width: min(520px, 100%);
+    }
+    #watermark-controls input[type="range"] {
+      width: min(240px, 100%);
+    }
+    #watermark-controls input[type="color"] {
+      width: 52px;
+      height: 38px;
+      padding: 3px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      cursor: pointer;
+    }
+    .watermark-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .watermark-inline-value {
+      font-size: 0.82rem;
+      color: var(--muted);
+      min-width: 3.75rem;
+      font-variant-numeric: tabular-nums;
+    }
+    #watermark-status {
+      font-size: 0.88rem;
+      min-height: 1.2em;
+      margin-top: 10px;
+    }
+    #watermark-status.error { color: #dc2626; }
+    #watermark-status.ok { color: #16a34a; }
+    #watermark-status.warning { color: #b45309; }
+
     /* Spreadsheet editor (client-side only) */
     #ss-editor {
       background: var(--surface);
@@ -761,6 +831,7 @@
 
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-watermark" aria-selected="false" aria-controls="panel-watermark" data-tab="watermark">Watermark</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-merge-rows" aria-selected="false" aria-controls="panel-merge-rows" data-tab="merge-rows">Row merger</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-merge-columns" aria-selected="false" aria-controls="panel-merge-columns" data-tab="merge-cols">Column merger</button>
@@ -922,6 +993,74 @@
     </dialog>
 
     </div><!-- panel-converter -->
+
+    <div id="panel-watermark" class="tab-panel" role="tabpanel" aria-labelledby="tab-watermark" hidden>
+      <div id="watermark-tool">
+        <div class="local-warning">
+          <strong>Local only.</strong> This tab watermarks your <strong>.pdf</strong> or <strong>.docx</strong> entirely in the browser. Nothing is uploaded to the server.
+          Large files may be slow, and existing document protection or unusual Word header layouts can limit how much the browser can preserve.
+        </div>
+
+        <div id="watermark-drop-zone" class="drop-zone">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <p>Drag &amp; drop a <strong>.docx</strong> or <strong>.pdf</strong> here, or <strong>click to browse</strong></p>
+          <small>One file at a time</small>
+          <p class="drop-zone__picked" id="watermark-file-picked" hidden><span id="watermark-file-display"></span></p>
+          <input type="file" id="watermark-file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" aria-label="Choose file to watermark" />
+        </div>
+
+        <div id="watermark-controls">
+          <div class="watermark-presets" role="group" aria-label="Watermark text presets">
+            <button type="button" class="btn btn--muted btn--sm watermark-preset" data-text="CONFIDENTIAL">CONFIDENTIAL</button>
+            <button type="button" class="btn btn--muted btn--sm watermark-preset" data-text="DRAFT">DRAFT</button>
+            <button type="button" class="btn btn--muted btn--sm watermark-preset" data-text="DO NOT COPY">DO NOT COPY</button>
+            <button type="button" class="btn btn--muted btn--sm watermark-preset" data-text="COPY">COPY</button>
+          </div>
+
+          <div class="filter-row">
+            <label>Watermark text
+              <input type="text" id="watermark-text" maxlength="120" autocomplete="off" placeholder="Type your watermark text" />
+            </label>
+          </div>
+
+          <div class="filter-row">
+            <label>Opacity
+              <input type="range" id="watermark-opacity" min="10" max="100" step="5" value="30" />
+            </label>
+            <span class="watermark-inline-value" id="watermark-opacity-value">30%</span>
+            <label>Angle
+              <select id="watermark-angle" aria-label="Watermark angle">
+                <option value="45" selected>Diagonal</option>
+                <option value="0">Horizontal</option>
+              </select>
+            </label>
+            <label>Color
+              <input type="color" id="watermark-color" value="#808080" aria-label="Watermark color" />
+            </label>
+            <label>Font size (px)
+              <input type="number" id="watermark-font-size" min="12" max="240" step="2" placeholder="Auto" />
+            </label>
+            <label>Layout
+              <select id="watermark-tile" aria-label="Watermark layout">
+                <option value="single" selected>Single centered</option>
+                <option value="tile">Tiled</option>
+              </select>
+            </label>
+          </div>
+
+          <p class="hint">PDF uses <code>pdf-lib</code>; DOCX updates Word header parts in-place. Re-running on a file previously watermarked by this tab replaces the prior Docs Garage watermark instead of stacking duplicates.</p>
+
+          <div class="btn-row" style="margin-bottom:0;">
+            <button type="button" class="btn btn--primary" id="watermark-apply-btn" disabled>Apply &amp; Download</button>
+          </div>
+          <p id="watermark-status" aria-live="polite"></p>
+        </div>
+      </div>
+    </div>
 
     <div id="panel-excel" class="tab-panel" role="tabpanel" aria-labelledby="tab-excel" hidden>
       <div id="excel-shrink">
@@ -1157,12 +1296,57 @@
     const _LOCAL_BADGE = '<span class="local-badge">⚡ 100 % local</span>';
     const SUBTITLE_EXCEL =
       _LOCAL_BADGE + 'Spreadsheet shrinker: your file never leaves the browser. Filter by column, download a lighter workbook.';
+    const SUBTITLE_WATERMARK =
+      _LOCAL_BADGE + 'Watermark: your file never leaves the browser. Add configurable text watermarks to .pdf or .docx, then download the processed copy.';
     const SUBTITLE_MERGE_ROWS =
       _LOCAL_BADGE + 'Row merger: files never leave the browser. Stack multiple workbooks that share the same columns into one tall sheet.';
     const SUBTITLE_MERGE_COLS =
       _LOCAL_BADGE + 'Column merger: files never leave the browser. LEFT JOIN — every row from the left workbook stays; add columns from the right where keys match.';
     const SUBTITLE_EDITOR =
       _LOCAL_BADGE + 'Spreadsheet editor: your file never leaves the browser — paginate, edit cells, mark rows to remove, download a new .xlsx.';
+
+    const _scriptLoadCache = new Map();
+    function loadExternalScript(url, isReady) {
+      if (isReady()) return Promise.resolve();
+      if (_scriptLoadCache.has(url)) return _scriptLoadCache.get(url);
+      const p = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = url;
+        script.async = true;
+        script.crossOrigin = 'anonymous';
+        script.referrerPolicy = 'no-referrer';
+        script.onload = () => {
+          if (isReady()) resolve();
+          else reject(new Error(`Loaded ${url}, but the library did not initialize.`));
+        };
+        script.onerror = () => reject(new Error(`Could not load ${url}. Check your network and refresh.`));
+        document.head.appendChild(script);
+      });
+      _scriptLoadCache.set(url, p);
+      p.catch(() => _scriptLoadCache.delete(url));
+      return p;
+    }
+
+    let watermarkLibsPromise = null;
+    function ensureWatermarkLibs() {
+      if (window.PDFLib && window.PizZip) {
+        return Promise.resolve({ PDFLib: window.PDFLib, PizZip: window.PizZip });
+      }
+      if (!watermarkLibsPromise) {
+        watermarkLibsPromise = Promise.all([
+          loadExternalScript(
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js',
+            () => typeof window.PDFLib !== 'undefined'
+          ),
+          loadExternalScript(
+            'https://cdnjs.cloudflare.com/ajax/libs/pizzip/3.1.7/pizzip.min.js',
+            () => typeof window.PizZip !== 'undefined'
+          ),
+        ]).then(() => ({ PDFLib: window.PDFLib, PizZip: window.PizZip }));
+        watermarkLibsPromise.catch(() => { watermarkLibsPromise = null; });
+      }
+      return watermarkLibsPromise;
+    }
 
     // ── SheetJS local helpers (shrinker / merger / joiner — no server round-trip) ──
 
@@ -1361,6 +1545,7 @@
     /** URL fragment (#…) for bookmarking each main tab; click updates the address bar. */
     const TAB_HASH_FRAGMENT = {
       converter: 'test-case-extractor',
+      watermark: 'watermark',
       excel: 'spreadsheet-shrinker',
       'merge-rows': 'row-merger',
       'merge-cols': 'column-merger',
@@ -1368,11 +1553,13 @@
     };
     const TAB_KEY_BY_HASH_FRAG = {
       'test-case-extractor': 'converter',
+      watermark: 'watermark',
       'spreadsheet-shrinker': 'excel',
       'row-merger': 'merge-rows',
       'column-merger': 'merge-cols',
       'spreadsheet-editor': 'editor',
       converter: 'converter',
+      watermark: 'watermark',
       excel: 'excel',
       'merge-rows': 'merge-rows',
       'merge-columns': 'merge-cols',
@@ -1400,17 +1587,21 @@
     }
 
     function applyMainTab(tab) {
-      const allowed = new Set(['converter', 'excel', 'merge-rows', 'merge-cols', 'editor']);
+      const allowed = new Set(['converter', 'watermark', 'excel', 'merge-rows', 'merge-cols', 'editor']);
       if (!allowed.has(tab)) tab = 'converter';
       document.querySelectorAll('.tab-bar .tab-trigger').forEach(b => {
         b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false');
       });
       document.getElementById('panel-converter').hidden = tab !== 'converter';
+      document.getElementById('panel-watermark').hidden = tab !== 'watermark';
       document.getElementById('panel-excel').hidden = tab !== 'excel';
       document.getElementById('panel-merge-rows').hidden = tab !== 'merge-rows';
       document.getElementById('panel-merge-columns').hidden = tab !== 'merge-cols';
       document.getElementById('panel-editor').hidden = tab !== 'editor';
-      if (tab === 'excel') pageSubtitle.innerHTML = SUBTITLE_EXCEL;
+      if (tab === 'watermark') {
+        pageSubtitle.innerHTML = SUBTITLE_WATERMARK;
+        void ensureWatermarkLibs().catch(() => {});
+      } else if (tab === 'excel') pageSubtitle.innerHTML = SUBTITLE_EXCEL;
       else if (tab === 'merge-rows') pageSubtitle.innerHTML = SUBTITLE_MERGE_ROWS;
       else if (tab === 'merge-cols') pageSubtitle.innerHTML = SUBTITLE_MERGE_COLS;
       else if (tab === 'editor') pageSubtitle.innerHTML = SUBTITLE_EDITOR;
@@ -3229,6 +3420,487 @@
           downloadBtn.textContent = 'Join & Download';
         }
       });
+    })();
+
+    // ── Watermark (.pdf / .docx — client-side only) ──────────────────────────
+    (() => {
+      const wmDrop = document.getElementById('watermark-drop-zone');
+      const wmFileInput = document.getElementById('watermark-file');
+      const wmFilePicked = document.getElementById('watermark-file-picked');
+      const wmFileDisplay = document.getElementById('watermark-file-display');
+      const wmText = document.getElementById('watermark-text');
+      const wmOpacity = document.getElementById('watermark-opacity');
+      const wmOpacityValue = document.getElementById('watermark-opacity-value');
+      const wmAngle = document.getElementById('watermark-angle');
+      const wmColor = document.getElementById('watermark-color');
+      const wmFontSize = document.getElementById('watermark-font-size');
+      const wmTile = document.getElementById('watermark-tile');
+      const wmApplyBtn = document.getElementById('watermark-apply-btn');
+      const wmStatus = document.getElementById('watermark-status');
+
+      const DOCX_WATERMARK_START = '<!--docs-garage-watermark:start-->';
+      const DOCX_WATERMARK_END = '<!--docs-garage-watermark:end-->';
+      const DOCX_WATERMARK_RX = /\s*<!--docs-garage-watermark:start-->[\s\S]*?<!--docs-garage-watermark:end-->\s*/g;
+
+      let pickedFile = null;
+      let busy = false;
+
+      function setWatermarkStatus(msg, cls) {
+        wmStatus.textContent = msg || '';
+        wmStatus.className = cls || '';
+      }
+
+      function syncWatermarkUi() {
+        wmOpacityValue.textContent = `${parseInt(wmOpacity.value, 10) || 30}%`;
+        wmApplyBtn.disabled = busy || !pickedFile || !wmText.value.trim();
+      }
+
+      function normalizeHexColor(raw) {
+        const s = String(raw || '').trim();
+        if (/^#[0-9a-f]{6}$/i.test(s)) return s.toUpperCase();
+        if (/^#[0-9a-f]{3}$/i.test(s)) {
+          return ('#' + s.slice(1).split('').map(ch => ch + ch).join('')).toUpperCase();
+        }
+        return '#808080';
+      }
+
+      function hexToRgbObject(hex) {
+        const s = normalizeHexColor(hex).slice(1);
+        return {
+          r: parseInt(s.slice(0, 2), 16),
+          g: parseInt(s.slice(2, 4), 16),
+          b: parseInt(s.slice(4, 6), 16),
+        };
+      }
+
+      function xmlEscape(text) {
+        return String(text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&apos;');
+      }
+
+      function escapeRegExp(s) {
+        return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+
+      function getXmlAttr(tag, attrName) {
+        const safe = escapeRegExp(attrName);
+        const m = tag.match(new RegExp(`\\b${safe}=(["'])(.*?)\\1`));
+        return m ? m[2] : '';
+      }
+
+      function resolveZipPath(baseDir, target) {
+        const raw = String(target || '').trim().replace(/\\/g, '/').replace(/^\/+/, '');
+        if (!raw) return '';
+        if (raw.startsWith('word/')) return raw;
+        const parts = `${baseDir}/${raw}`.split('/');
+        const out = [];
+        parts.forEach(part => {
+          if (!part || part === '.') return;
+          if (part === '..') out.pop();
+          else out.push(part);
+        });
+        return out.join('/');
+      }
+
+      function appendBeforeClose(xml, closingTag, addition) {
+        const idx = xml.lastIndexOf(closingTag);
+        if (idx < 0) throw new Error(`Missing ${closingTag} in DOCX part.`);
+        return xml.slice(0, idx) + addition + xml.slice(idx);
+      }
+
+      function hasContentTypeOverride(xml, partName) {
+        const safe = escapeRegExp(partName);
+        return new RegExp(`<Override\\b[^>]*\\bPartName=(["'])${safe}\\1`, 'i').test(xml);
+      }
+
+      function ensureDocxHeaderNamespaces(xml) {
+        if (!/<w:hdr\b/.test(xml)) throw new Error('Unsupported DOCX header XML.');
+        return xml.replace(/<w:hdr\b([^>]*)>/, (full, attrs) => {
+          let out = attrs || '';
+          [
+            ['xmlns:w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'],
+            ['xmlns:r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'],
+            ['xmlns:v', 'urn:schemas-microsoft-com:vml'],
+            ['xmlns:o', 'urn:schemas-microsoft-com:office:office'],
+            ['xmlns:w10', 'urn:schemas-microsoft-com:office:word'],
+          ].forEach(([name, value]) => {
+            if (!new RegExp(`\\b${escapeRegExp(name)}=`).test(full)) out += ` ${name}="${value}"`;
+          });
+          return `<w:hdr${out}>`;
+        });
+      }
+
+      function buildEmptyHeaderXml() {
+        return [
+          '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+          '<w:hdr',
+          ' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"',
+          ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"',
+          ' xmlns:v="urn:schemas-microsoft-com:vml"',
+          ' xmlns:o="urn:schemas-microsoft-com:office:office"',
+          ' xmlns:w10="urn:schemas-microsoft-com:office:word"',
+          '></w:hdr>',
+        ].join('');
+      }
+
+      function pickWatermarkOptions() {
+        const text = wmText.value.trim();
+        const opacityPercent = Math.max(10, Math.min(100, parseInt(wmOpacity.value, 10) || 30));
+        const fontSizeRaw = parseInt(wmFontSize.value, 10);
+        return {
+          text,
+          opacity: opacityPercent / 100,
+          opacityPercent,
+          angle: parseInt(wmAngle.value, 10) === 0 ? 0 : 45,
+          color: normalizeHexColor(wmColor.value),
+          fontSize: Number.isFinite(fontSizeRaw) && fontSizeRaw > 0 ? fontSizeRaw : null,
+          tile: wmTile.value === 'tile',
+        };
+      }
+
+      function buildDownloadName(fileName, ext) {
+        const base = String(fileName || '').replace(/\.[^.]+$/, '') || 'watermarked';
+        return `${base}_watermarked.${ext}`;
+      }
+
+      function triggerBlobDownload(blob, filename) {
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = filename;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+
+      async function applyWatermarkPdf(arrayBuffer, opts) {
+        const { PDFDocument, StandardFonts, rgb, degrees } = (await ensureWatermarkLibs()).PDFLib;
+        const pdfDoc = await PDFDocument.load(arrayBuffer);
+        const font = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+        const rgbColor = hexToRgbObject(opts.color);
+        const color = rgb(rgbColor.r / 255, rgbColor.g / 255, rgbColor.b / 255);
+
+        pdfDoc.getPages().forEach(page => {
+          const { width, height } = page.getSize();
+          let fontSize = opts.fontSize;
+          if (!fontSize) {
+            const targetWidth = opts.tile ? width * 0.24 : width * 0.62;
+            const probeSize = opts.tile ? 30 : 72;
+            const probeWidth = Math.max(1, font.widthOfTextAtSize(opts.text, probeSize));
+            fontSize = probeSize * targetWidth / probeWidth;
+            fontSize = Math.max(opts.tile ? 16 : 28, Math.min(opts.tile ? 42 : 96, fontSize));
+          }
+          const textWidth = font.widthOfTextAtSize(opts.text, fontSize);
+          const textHeight = font.heightAtSize(fontSize);
+          const drawOne = (x, y) => {
+            page.drawText(opts.text, {
+              x,
+              y,
+              size: fontSize,
+              font,
+              color,
+              rotate: degrees(opts.angle),
+              opacity: opts.opacity,
+              lineHeight: textHeight,
+            });
+          };
+
+          if (opts.tile) {
+            const stepX = Math.max(width / 3.1, textWidth * 0.82);
+            const stepY = Math.max(height / 4.2, textHeight * 2.8);
+            let colIndex = 0;
+            for (let x = -textWidth * 0.4; x < width + textWidth; x += stepX) {
+              const yShift = colIndex % 2 ? stepY * 0.45 : 0;
+              for (let y = -textHeight; y < height + textHeight; y += stepY) {
+                drawOne(x, y + yShift);
+              }
+              colIndex++;
+            }
+          } else {
+            drawOne((width - textWidth) / 2, (height - textHeight) / 2);
+          }
+        });
+
+        const out = await pdfDoc.save();
+        return new Blob([out], { type: 'application/pdf' });
+      }
+
+      function resolveDocxFontPx(opts) {
+        if (opts.fontSize) return opts.fontSize;
+        const len = Math.max(4, opts.text.length);
+        const autoPx = opts.tile ? 360 / len : 720 / len;
+        return Math.max(opts.tile ? 20 : 34, Math.min(opts.tile ? 40 : 82, autoPx));
+      }
+
+      function buildDocxShapeSpecs(opts) {
+        const fontPx = resolveDocxFontPx(opts);
+        const fontPt = Math.max(10, Math.round(fontPx * 0.75));
+        const widthPt = Math.max(
+          opts.tile ? 155 : 260,
+          Math.min(opts.tile ? 250 : 520, fontPx * Math.max(opts.text.length, 4) * 0.42)
+        );
+        const heightPt = Math.max(
+          opts.tile ? 62 : 138,
+          Math.min(opts.tile ? 110 : 220, fontPx * (opts.angle === 0 ? 1.55 : 2.15))
+        );
+        if (!opts.tile) return [{ centered: true, widthPt, heightPt, fontPt }];
+        const stepX = Math.max(180, widthPt * 0.95);
+        const stepY = Math.max(145, heightPt * 1.75);
+        const out = [];
+        for (let row = 0; row < 3; row++) {
+          for (let col = 0; col < 3; col++) {
+            out.push({
+              centered: false,
+              leftPt: -45 + (col * stepX) + (row % 2 ? stepX * 0.35 : 0),
+              topPt: 35 + row * stepY,
+              widthPt,
+              heightPt,
+              fontPt,
+            });
+          }
+        }
+        return out;
+      }
+
+      function buildDocxShapeStyle(spec, rotation) {
+        const dims = `width:${spec.widthPt.toFixed(1)}pt;height:${spec.heightPt.toFixed(1)}pt;z-index:-251654144;mso-wrap-edited:f;rotation:${rotation}`;
+        if (spec.centered) {
+          return `position:absolute;margin-left:0;margin-top:0;${dims};mso-position-horizontal:center;mso-position-horizontal-relative:page;mso-position-vertical:center;mso-position-vertical-relative:page`;
+        }
+        return `position:absolute;margin-left:${spec.leftPt.toFixed(1)}pt;margin-top:${spec.topPt.toFixed(1)}pt;${dims};mso-position-horizontal:left;mso-position-horizontal-relative:page;mso-position-vertical:top;mso-position-vertical-relative:page`;
+      }
+
+      function buildDocxWatermarkBlock(opts) {
+        const rotation = opts.angle === 45 ? 315 : 0;
+        const opacity = Math.max(0.05, Math.min(1, opts.opacity));
+        const opacityStr = opacity < 1 ? opacity.toFixed(2).replace(/^0/, '') : '1';
+        const shapes = buildDocxShapeSpecs(opts).map((spec, idx) => {
+          const shapeId = `docsGarageWatermark${idx + 1}`;
+          const spid = `_x0000_s${4100 + idx}`;
+          return (
+            `<v:shape id="${shapeId}" o:spid="${spid}" type="#docsGarageWatermarkType"` +
+            ` style="${xmlEscape(buildDocxShapeStyle(spec, rotation))}" fillcolor="${opts.color}" stroked="f" o:allowincell="f">` +
+            `<v:fill opacity="${opacityStr}"/>` +
+            '<v:path textpathok="t"/>' +
+            `<v:textpath on="t" fitshape="t" style="font-family:&quot;Calibri&quot;;font-size:${spec.fontPt}pt" string="${xmlEscape(opts.text)}"/>` +
+            '</v:shape>'
+          );
+        }).join('');
+
+        return (
+          DOCX_WATERMARK_START +
+          '<w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:pict>' +
+          '<v:shapetype id="docsGarageWatermarkType" coordsize="1600,21600" o:spt="136" adj="10800" path="m@7,l@8,m@5,21600l@6,21600e">' +
+          '<v:formulas>' +
+          '<v:f eqn="sum #0 0 10800"/><v:f eqn="prod #0 2 1"/><v:f eqn="sum 21600 0 @1"/><v:f eqn="sum 0 0 @2"/>' +
+          '<v:f eqn="sum 21600 0 @3"/><v:f eqn="if @0 @3 0"/><v:f eqn="if @0 21600 @1"/><v:f eqn="if @0 0 @2"/>' +
+          '<v:f eqn="if @0 @4 21600"/><v:f eqn="mid @5 @6"/><v:f eqn="mid @8 @5"/><v:f eqn="mid @7 @8"/><v:f eqn="mid @6 @7"/>' +
+          '</v:formulas>' +
+          '<v:path textpathok="t" o:connecttype="custom" o:connectlocs="@9,0;@10,10800;@11,21600;@12,10800" o:connectangles="270,180,90,0"/>' +
+          '<o:lock v:ext="edit" text="t" shapetype="t"/>' +
+          '</v:shapetype>' +
+          shapes +
+          '</w:pict></w:r></w:p>' +
+          DOCX_WATERMARK_END
+        );
+      }
+
+      function upsertWatermarkHeaderXml(xml, opts) {
+        let out = ensureDocxHeaderNamespaces(xml || buildEmptyHeaderXml());
+        out = out.replace(DOCX_WATERMARK_RX, '');
+        return appendBeforeClose(out, '</w:hdr>', buildDocxWatermarkBlock(opts));
+      }
+
+      async function applyWatermarkDocx(arrayBuffer, opts) {
+        const { PizZip } = await ensureWatermarkLibs();
+        const zip = new PizZip(new Uint8Array(arrayBuffer));
+        const documentEntry = zip.file('word/document.xml');
+        const relsEntry = zip.file('word/_rels/document.xml.rels');
+        const contentTypesEntry = zip.file('[Content_Types].xml');
+        if (!documentEntry || !relsEntry || !contentTypesEntry) {
+          throw new Error('This DOCX is missing a required XML part.');
+        }
+
+        let documentXml = documentEntry.asText();
+        let relsXml = relsEntry.asText();
+        let contentTypesXml = contentTypesEntry.asText();
+
+        const headerTargetsByRelId = new Map();
+        const relTagRe = /<Relationship\b[^>]*\/?>/g;
+        let relTag;
+        while ((relTag = relTagRe.exec(relsXml))) {
+          const tag = relTag[0];
+          if (getXmlAttr(tag, 'Type') !== 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/header') continue;
+          const relId = getXmlAttr(tag, 'Id');
+          const target = getXmlAttr(tag, 'Target');
+          if (relId && target) headerTargetsByRelId.set(relId, resolveZipPath('word', target));
+        }
+
+        let nextRelNum = 1;
+        relsXml.replace(/\bId=(["'])rId(\d+)\1/g, (_, __, num) => {
+          nextRelNum = Math.max(nextRelNum, parseInt(num, 10) + 1);
+          return '';
+        });
+
+        let nextHeaderNum = 1;
+        Object.keys(zip.files).forEach(name => {
+          const m = name.match(/^word\/header(\d+)\.xml$/i);
+          if (m) nextHeaderNum = Math.max(nextHeaderNum, parseInt(m[1], 10) + 1);
+        });
+
+        const headerPaths = new Set();
+        const contentTypeOverride = 'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml';
+        let sawSection = false;
+
+        documentXml = documentXml.replace(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g, sectXml => {
+          sawSection = true;
+          const refs = [...sectXml.matchAll(/<w:headerReference\b[^>]*\/?>/g)].map(m => m[0]);
+          const resolved = refs
+            .map(tag => headerTargetsByRelId.get(getXmlAttr(tag, 'r:id')))
+            .filter(Boolean);
+          if (resolved.length) {
+            resolved.forEach(path => headerPaths.add(path));
+            return sectXml;
+          }
+          const relId = `rId${nextRelNum++}`;
+          const headerName = `header${nextHeaderNum++}.xml`;
+          const fullPath = `word/${headerName}`;
+          headerPaths.add(fullPath);
+          headerTargetsByRelId.set(relId, fullPath);
+          relsXml = appendBeforeClose(
+            relsXml,
+            '</Relationships>',
+            `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="${headerName}"/>`
+          );
+          if (!hasContentTypeOverride(contentTypesXml, `/word/${headerName}`)) {
+            contentTypesXml = appendBeforeClose(
+              contentTypesXml,
+              '</Types>',
+              `<Override PartName="/word/${headerName}" ContentType="${contentTypeOverride}"/>`
+            );
+          }
+          return sectXml.replace(/<\/w:sectPr>/, `<w:headerReference w:type="default" r:id="${relId}"/></w:sectPr>`);
+        });
+
+        if (!sawSection) throw new Error('This DOCX does not contain any section properties.');
+
+        headerPaths.forEach(path => {
+          const existing = zip.file(path);
+          const xml = existing ? existing.asText() : buildEmptyHeaderXml();
+          zip.file(path, upsertWatermarkHeaderXml(xml, opts));
+          const headerPart = '/' + path.replace(/^\/+/, '');
+          if (!hasContentTypeOverride(contentTypesXml, headerPart)) {
+            contentTypesXml = appendBeforeClose(
+              contentTypesXml,
+              '</Types>',
+              `<Override PartName="${headerPart}" ContentType="${contentTypeOverride}"/>`
+            );
+          }
+        });
+
+        zip.file('word/document.xml', documentXml);
+        zip.file('word/_rels/document.xml.rels', relsXml);
+        zip.file('[Content_Types].xml', contentTypesXml);
+
+        return zip.generate({
+          type: 'blob',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          compression: 'DEFLATE',
+        });
+      }
+
+      function attachWatermarkFile(file) {
+        if (!file || !/\.(pdf|docx)$/i.test(file.name)) {
+          setWatermarkStatus('Choose a .pdf or .docx file.', 'error');
+          return;
+        }
+        pickedFile = file;
+        wmFileInput.value = '';
+        wmDrop.classList.add('drop-zone--has-file');
+        wmFilePicked.hidden = false;
+        wmFileDisplay.textContent = file.name;
+        syncWatermarkUi();
+        setWatermarkStatus('Ready — choose your settings, then apply the watermark.', 'ok');
+        void ensureWatermarkLibs().catch(err => {
+          setWatermarkStatus(`Library load warning: ${err.message || err}`, 'warning');
+        });
+      }
+
+      wmDrop.addEventListener('click', () => wmFileInput.click());
+      wmFileInput.addEventListener('change', () => {
+        const file = wmFileInput.files && wmFileInput.files[0];
+        if (file) attachWatermarkFile(file);
+      });
+      wmDrop.addEventListener('dragover', e => {
+        e.preventDefault();
+        wmDrop.classList.add('dragover');
+      });
+      wmDrop.addEventListener('dragleave', () => wmDrop.classList.remove('dragover'));
+      wmDrop.addEventListener('drop', e => {
+        e.preventDefault();
+        wmDrop.classList.remove('dragover');
+        const file = [...e.dataTransfer.files].find(f => /\.(pdf|docx)$/i.test(f.name));
+        if (!file) {
+          setWatermarkStatus('Drop a .pdf or .docx file.', 'error');
+          return;
+        }
+        attachWatermarkFile(file);
+      });
+
+      wmOpacity.addEventListener('input', syncWatermarkUi);
+      wmText.addEventListener('input', syncWatermarkUi);
+      document.querySelectorAll('.watermark-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+          wmText.value = btn.getAttribute('data-text') || '';
+          syncWatermarkUi();
+          wmText.focus();
+        });
+      });
+
+      wmApplyBtn.addEventListener('click', async () => {
+        const file = pickedFile;
+        const opts = pickWatermarkOptions();
+        if (!file) {
+          setWatermarkStatus('Choose a file first.', 'error');
+          return;
+        }
+        if (!opts.text) {
+          setWatermarkStatus('Enter watermark text first.', 'error');
+          syncWatermarkUi();
+          return;
+        }
+
+        busy = true;
+        syncWatermarkUi();
+        setWatermarkStatus('Applying watermark locally…', 'warning');
+
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          let blob;
+          let downloadName;
+          if (/\.pdf$/i.test(file.name)) {
+            blob = await applyWatermarkPdf(arrayBuffer, opts);
+            downloadName = buildDownloadName(file.name, 'pdf');
+          } else if (/\.docx$/i.test(file.name)) {
+            blob = await applyWatermarkDocx(arrayBuffer, opts);
+            downloadName = buildDownloadName(file.name, 'docx');
+          } else {
+            throw new Error('Only .pdf and .docx files are supported on this tab.');
+          }
+          triggerBlobDownload(blob, downloadName);
+          setWatermarkStatus(`Downloaded ${downloadName}.`, 'ok');
+        } catch (err) {
+          setWatermarkStatus(`Watermark error: ${err.message || err}`, 'error');
+        } finally {
+          busy = false;
+          syncWatermarkUi();
+        }
+      });
+
+      syncWatermarkUi();
     })();
 
     // Rejoin an in-progress extraction job after page refresh or navigation
