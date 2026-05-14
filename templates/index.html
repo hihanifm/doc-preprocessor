@@ -1339,7 +1339,7 @@
             () => typeof window.PDFLib !== 'undefined'
           ),
           loadExternalScript(
-            'https://cdnjs.cloudflare.com/ajax/libs/pizzip/3.1.7/pizzip.min.js',
+            'https://cdn.jsdelivr.net/npm/pizzip@3.1.7/dist/pizzip.min.js',
             () => typeof window.PizZip !== 'undefined'
           ),
         ]).then(() => ({ PDFLib: window.PDFLib, PizZip: window.PizZip }));
