@@ -827,15 +827,15 @@
 <body>
   <div class="container">
     <h1>Docs Garage</h1>
-    <p class="subtitle" id="page-subtitle">Roll Word &amp; Excel into the garage — pull out test cases (plus other structured rows), preview them here, drive away with a spreadsheet.</p>
+    <p class="subtitle" id="page-subtitle">Roll Word &amp; Excel into the garage — pull out test cases (plus other structured rows), preview them here, drive away with an Excel file.</p>
 
     <div class="tab-bar" role="tablist" aria-label="Views">
       <button type="button" class="tab-trigger" role="tab" id="tab-converter" aria-selected="true" aria-controls="panel-converter" data-tab="converter">Test case extractor</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-watermark" aria-selected="false" aria-controls="panel-watermark" data-tab="watermark">Watermark</button>
-      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Spreadsheet shrinker</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-excel" aria-selected="false" aria-controls="panel-excel" data-tab="excel">Excel shrinker</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-merge-rows" aria-selected="false" aria-controls="panel-merge-rows" data-tab="merge-rows">Row merger</button>
       <button type="button" class="tab-trigger" role="tab" id="tab-merge-columns" aria-selected="false" aria-controls="panel-merge-columns" data-tab="merge-cols">Column merger</button>
-      <button type="button" class="tab-trigger" role="tab" id="tab-editor" aria-selected="false" aria-controls="panel-editor" data-tab="editor">Spreadsheet editor</button>
+      <button type="button" class="tab-trigger" role="tab" id="tab-editor" aria-selected="false" aria-controls="panel-editor" data-tab="editor">Excel editor</button>
     </div>
 
     <div id="panel-converter" class="tab-panel" role="tabpanel" aria-labelledby="tab-converter">
@@ -1296,7 +1296,7 @@
       'Test case extractor: drop Word (.docx) or digital PDF (.pdf) — we pull structured rows (test cases included), preview them, export Excel.';
     const _LOCAL_BADGE = '<span class="local-badge">⚡ 100 % local</span>';
     const SUBTITLE_EXCEL =
-      _LOCAL_BADGE + 'Spreadsheet shrinker: your file never leaves the browser. Filter by column, download a lighter workbook.';
+      _LOCAL_BADGE + 'Excel shrinker: your file never leaves the browser. Filter by column, download a lighter workbook.';
     const SUBTITLE_WATERMARK =
       _LOCAL_BADGE + 'Watermark: your file never leaves the browser. Add configurable text watermarks to .pdf or .docx, then download the processed copy.';
     const SUBTITLE_MERGE_ROWS =
@@ -1304,7 +1304,7 @@
     const SUBTITLE_MERGE_COLS =
       _LOCAL_BADGE + 'Column merger: files never leave the browser. LEFT JOIN — every row from the left workbook stays; add columns from the right where keys match.';
     const SUBTITLE_EDITOR =
-      _LOCAL_BADGE + 'Spreadsheet editor: your file never leaves the browser — paginate, edit cells, mark rows to remove, download a new .xlsx.';
+      _LOCAL_BADGE + 'Excel editor: your file never leaves the browser — paginate, edit cells, mark rows to remove, download a new .xlsx.';
 
     const _scriptLoadCache = new Map();
     function loadExternalScript(url, isReady) {
@@ -2973,7 +2973,7 @@
 
       function loadWorkbookFromFile(file) {
         if (typeof XLSX === 'undefined') {
-          setSsStatus('Spreadsheet library failed to load. Check your network and refresh.', 'error');
+          setSsStatus('Excel library failed to load. Check your network and refresh.', 'error');
           return;
         }
         const reader = new FileReader();
