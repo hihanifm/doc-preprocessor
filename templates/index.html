@@ -2922,7 +2922,7 @@
       const errorBox  = document.getElementById('merge-error');
       const colsPreview = document.getElementById('merge-columns-preview');
 
-      let pickedFiles = null;
+      let pickedFiles = [];
 
       function clearMergeColumnPreview() {
         colsPreview.style.display = 'none';
@@ -3036,9 +3036,13 @@
       });
 
       function setFiles(files) {
-        pickedFiles = files && files.length ? files : null;
-        if (pickedFiles) {
-          const names = Array.from(pickedFiles).map(f => esc(f.name)).join(', ');
+        const incoming = files && files.length ? Array.from(files) : [];
+        if (incoming.length) {
+          const existing = pickedFiles.filter(f => !incoming.some(n => n.name === f.name));
+          pickedFiles = [...existing, ...incoming];
+        }
+        if (pickedFiles.length) {
+          const names = pickedFiles.map(f => esc(f.name)).join(', ');
           fileList.innerHTML = `<strong>${pickedFiles.length} file${pickedFiles.length > 1 ? 's' : ''}:</strong> ${names}`;
           fileList.style.display = '';
         } else {
