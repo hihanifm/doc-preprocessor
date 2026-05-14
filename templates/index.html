@@ -1002,6 +1002,7 @@
             <input type="checkbox" id="merge-add-source" />
             Add "Source file" column
           </label>
+          <button type="button" class="btn" id="merge-clear-btn" style="display:none;">Clear</button>
           <button type="button" class="btn btn--primary" id="merge-download-btn" disabled>Merge &amp; Download</button>
         </div>
 
@@ -2919,6 +2920,7 @@
       const addSource = document.getElementById('merge-add-source');
       const mergeSheetHost = document.getElementById('merge-sheet-per-file');
       const mergeBtn  = document.getElementById('merge-download-btn');
+      const clearBtn  = document.getElementById('merge-clear-btn');
       const errorBox  = document.getElementById('merge-error');
       const colsPreview = document.getElementById('merge-columns-preview');
 
@@ -3045,12 +3047,16 @@
           const names = pickedFiles.map(f => esc(f.name)).join(', ');
           fileList.innerHTML = `<strong>${pickedFiles.length} file${pickedFiles.length > 1 ? 's' : ''}:</strong> ${names}`;
           fileList.style.display = '';
+          clearBtn.style.display = '';
         } else {
           fileList.style.display = 'none';
+          clearBtn.style.display = 'none';
         }
         errorBox.style.display = 'none';
         void rebuildMergeSheetPickers();
       }
+
+      clearBtn.addEventListener('click', () => { pickedFiles = []; fileInput.value = ''; setFiles([]); });
 
       dropZone.addEventListener('click', () => fileInput.click());
       dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drop-zone--over'); });
